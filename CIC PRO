@@ -1,0 +1,426 @@
+//@version=6
+indicator("CIC [CantoLab]",shorttitle="cic", overlay = true, max_boxes_count = 500, max_lines_count = 500, max_labels_count = 500)
+
+//#region[USER INPUTS]
+group1  = "Bias Filter"
+biasInput  = input.string("Neutral", "Bias", options = ["Neutral", "Bullish", "Bearish"], group = group1)
+htfModel       = input.string("Auto", "Fractal", options = ["Custom", "Auto", "1m-15m", "3m-30m", "5m-1H", "15m-4H", "1H-1D", "4H-1W", "1D-1W"], group = group1,
+     tooltip = "The higher timeframe that C2, SMT and PSP are detected on, and that the projected candles are built from.\n\nAuto: steps up from the chart timeframe (1m→15m, 3m→30m, 5m→1H, 15m→4H, 1H→1D, 4H→1W, 1D→1M).\n\nA named pair (e.g. 5m-1H) fixes the HTF regardless of chart timeframe, and warns if the chart is above the pair's LTF.\n\nCustom: pick the HTF yourself.")
+customHTF      = input.timeframe("60", "Custom HTF", group = group1, active = htfModel == "Custom")
+
+group2        = "SMT/PSP Settings"
+smtLabelSizeIn  = input.string("Small", "Label Size", group = group2, options = ["Tiny", "Small", "Normal", "Large", "Huge"],
+     tooltip = "Size of the C2, SMT and PSP labels, on the chart and on the HTF candles.")
+smtModeInput    = input.string("Auto", "Pair Mode", options = ["Auto", "Manual"], group = group2)
+manualSmtSymbol = input.symbol("NQ1!", "Manual Symbol", group = group2, active = smtModeInput == "Manual")
+inverse         = input.bool(false, "Inverse?", group = group2,
+     tooltip = "Flip the correlated symbol's price (1/price) for inversely-correlated instruments, e.g. DXY vs USDJPY.")
+smtColor        = input.color(color.new(#ff0000, 0), "SMT/PSP Color", inline = "smt", group = group2)
+smtWidth        = input.int(1, "", inline = "smt", group = group2, options = [1, 2, 3, 4])
+smtStyleInput   = input.string("Solid", "", inline = "smt", group = group2, options = ["Solid", "Dashed", "Dotted"])
+textColor = input.color(color.new(#000000,0), "c2 label color", group = group2)
+
+groupHtf       = "HTF Candles"
+showHtf        = input.bool(true, "HTF Candles", group = groupHtf, inline = "count",
+     tooltip = "Projects the last N higher-timeframe candles of the chart symbol, then the same N candles of the SMT pair, to the right of price.\n\nThe pair's candles are rescaled onto the chart's price range so the two groups can be compared side by side — their absolute prices are not meaningful, only their shape.\n\nTurning this off only hides the projection; all C2/SMT/PSP detection still runs on the HTF.")
+htfCandleCount = input.int(4, "", minval = 1, maxval = 10, group = groupHtf, inline = "count")
+candleOffsetIn = input.int(0, "Offset", minval = 0, group = groupHtf,
+     tooltip = "Extra bars of gap between the last chart bar and the start of the projection. 0 = the default 20-bar gap.")
+
+bullBody       = input.color(color.new(#ffffff, 0), "Bull", inline = "htfcol", group = groupHtf)
+bearBody       = input.color(color.new(#000000, 0), "Bear", inline = "htfcol", group = groupHtf)
+wickColor      = input.color(color.new(#000000, 0), "Body/Wick", inline = "htfcol", group = groupHtf)
+pspBody        = input.color(color.new(#ff0000, 0), "PSP", inline = "htfcol", group = groupHtf,
+     tooltip = "Body color for a projected HTF candle that fired a PSP. Overrides the Bull/Bear body color on that candle.")
+candleText     = input.color(color.new(#000000, 0), "Header Text", inline = "hdr", group = groupHtf)
+htfLabelSizeIn = input.string("Normal", "", options = ["Tiny", "Small", "Normal", "Large", "Huge"], group = groupHtf, inline = "hdr",
+     tooltip = "Size of the symbol-name label above each HTF candle group. The timeframe tag underneath it is always one size smaller.")
+
+
+
+
+
+//#endregion
+
+//#region[PLOT HELPERS]
+const color  TRANSPARENT   = color.new(color.white, 100)
+const int    CANDLE_SPACE  = 3
+const int    CANDLE_OFFSET = 20
+const int    GROUP_GAP     = 15
+const int    MIN_HISTORY   = 3
+const string C2_UP         = "\nC2"
+const string C2_DOWN       = "C2\n"
+
+var smtLineStyle = smtStyleInput == "Dashed" ? line.style_dashed : smtStyleInput == "Dotted" ? line.style_dotted : line.style_solid
+
+textSize(string s) =>
+    switch s
+        "Tiny"   => size.tiny
+        "Small"  => size.small
+        "Normal" => size.normal
+        "Large"  => size.large
+        =>          size.huge
+
+sizeStepDown(string s) =>
+    switch s
+        "Huge"   => "Large"
+        "Large"  => "Normal"
+        "Normal" => "Small"
+        =>          "Tiny"
+
+cleanTicker(string sym) =>
+    array<string> parts = str.split(sym, ":")
+    parts.get(parts.size() - 1)
+
+tfLabel(string tf) =>
+    switch tf
+        "1"   => "1m"
+        "3"   => "3m"
+        "5"   => "5m"
+        "15"  => "15m"
+        "30"  => "30m"
+        "60"  => "1h"
+        "240" => "4h"
+        "1D"  => "1D"
+        "D"   => "1D"
+        "1W"  => "1W"
+        "W"   => "1W"
+        "1M"  => "1M"
+        "M"   => "1M"
+        =>       tf + "m"
+
+tfMins(string tf) =>
+    switch tf
+        "1D" => 1440
+        "D"  => 1440
+        "1W" => 10080
+        "W"  => 10080
+        "1M" => 43200
+        "M"  => 43200
+        =>      int(str.tonumber(tf))
+
+curTfCode() =>
+    timeframe.isdaily ? "1D" : timeframe.isweekly ? "1W" : timeframe.ismonthly ? "1M" : timeframe.period
+
+autoHTF() =>
+    switch curTfCode()
+        "1"   => "15"
+        "3"   => "30"
+        "5"   => "60"
+        "15"  => "240"
+        "60"  => "1D"
+        "240" => "1W"
+        "1D"  => "1M"
+        =>       "1M"
+
+isAutoValidTf(int mins) =>
+    mins == 1 or mins == 3 or mins == 5 or mins == 15 or mins == 60 or mins == 240 or mins == 1440
+
+rescale(float v, float srcLo, float srcHi, float dstLo, float dstHi) =>
+    float srcRng = srcHi - srcLo
+    na(v) or na(srcRng) ? na : srcRng <= 0 ? (dstLo + dstHi) / 2 : dstLo + (v - srcLo) / srcRng * (dstHi - dstLo)
+
+tagLabel(int x, float y, bool isHigh, string txt, color col) =>
+    label.new(x, y, txt,
+         xloc             = xloc.bar_index,
+         yloc             = yloc.price,
+         style            = isHigh ? label.style_label_down : label.style_label_up,
+         color            = TRANSPARENT,
+         textcolor        = col,
+         size             = textSize(smtLabelSizeIn),
+         text_font_family = font.family_monospace)
+
+smtLine(int x1, float y1, int x2, float y2) =>
+    line.new(x1, y1, x2, y2, xloc = xloc.bar_index, color = smtColor, width = smtWidth, style = smtLineStyle)
+//#endregion
+
+//#region[TYPES]
+type HtfBar
+    float o          = na
+    float h          = na
+    float l          = na
+    float c          = na
+    int   hBar       = na
+    int   lBar       = na
+    float po         = na
+    float ph         = na
+    float pl         = na
+    float pc         = na
+    bool  smtBull    = false
+    bool  smtBear    = false
+    bool  psp        = false
+    bool  c2Bull     = false
+    bool  c2Bear     = false
+    bool  pairC2Bull = false
+    bool  pairC2Bear = false
+
+type Signal
+    bool   bull     = false
+    bool   bear     = false
+    string bullText = na
+    string bearText = na
+
+type Projection
+    array<box>   boxes  = na
+    array<line>  lines  = na
+    array<label> labels = na
+//#endregion
+
+//#region[FUNCTIONS AND METHODS]
+autoSmtPair(string root) =>
+    switch root
+        "NQ" => "ES1!"
+        "ES" => "NQ1!"
+        "YM" => "ES1!"
+        => na
+
+invert(float v) =>
+    inverse ? 1.0 / v : v
+
+isBull(float o, float c) => c > o
+isBear(float o, float c) => c < o
+
+method extend(HtfBar b, float h, float l, float c, float ph, float pl, float pc) =>
+    if h > b.h
+        b.h    := h
+        b.hBar := bar_index
+    if l < b.l
+        b.l    := l
+        b.lBar := bar_index
+    b.c  := c
+    b.ph := math.max(b.ph, ph)
+    b.pl := math.min(b.pl, pl)
+    b.pc := pc
+    b
+
+method c2(HtfBar cur, HtfBar prev, bool isHigh, bool usePair) =>
+    float curExt   = usePair ? (isHigh ? cur.ph  : cur.pl)  : (isHigh ? cur.h  : cur.l)
+    float prevExt  = usePair ? (isHigh ? prev.ph : prev.pl) : (isHigh ? prev.h : prev.l)
+    float curClose = usePair ? cur.pc : cur.c
+    isHigh ? curExt > prevExt and curClose < prevExt : curExt < prevExt and curClose > prevExt
+
+method smt(HtfBar cur, HtfBar prev, bool isHigh) =>
+    isHigh ? cur.h > prev.h and cur.ph < prev.ph : cur.l < prev.l and cur.pl > prev.pl
+
+method psp(HtfBar b) =>
+    (isBull(b.o, b.c) and isBear(b.po, b.pc)) or (isBear(b.o, b.c) and isBull(b.po, b.pc))
+
+method pairView(HtfBar b, float srcLo, float srcHi, float dstLo, float dstHi) =>
+    HtfBar v = HtfBar.new()
+    v.o       := rescale(b.po, srcLo, srcHi, dstLo, dstHi)
+    v.h       := rescale(b.ph, srcLo, srcHi, dstLo, dstHi)
+    v.l       := rescale(b.pl, srcLo, srcHi, dstLo, dstHi)
+    v.c       := rescale(b.pc, srcLo, srcHi, dstLo, dstHi)
+    v.smtBull := b.smtBull
+    v.smtBear := b.smtBear
+    v.psp     := b.psp
+    v.c2Bull  := b.pairC2Bull
+    v.c2Bear  := b.pairC2Bear
+    v
+
+method pin(Signal s, HtfBar b, color col) =>
+    if s.bull
+        tagLabel(b.lBar, b.l, false, s.bullText, col)
+    if s.bear
+        tagLabel(b.hBar, b.h, true, s.bearText, col)
+
+method span(Signal s, HtfBar prev, HtfBar cur) =>
+    if s.bull
+        smtLine(prev.lBar, prev.l, cur.lBar, cur.l)
+        tagLabel(prev.lBar + int((cur.lBar - prev.lBar) / 2), (prev.l + cur.l) / 2, false, s.bullText, smtColor)
+    if s.bear
+        smtLine(prev.hBar, prev.h, cur.hBar, cur.h)
+        tagLabel(prev.hBar + int((cur.hBar - prev.hBar) / 2), (prev.h + cur.h) / 2, true, s.bearText, smtColor)
+
+method clear(Projection p) =>
+    while p.boxes.size() > 0
+        box.delete(p.boxes.pop())
+    while p.lines.size() > 0
+        line.delete(p.lines.pop())
+    while p.labels.size() > 0
+        label.delete(p.labels.pop())
+
+method candle(Projection p, int leftBar, HtfBar b) =>
+    if not na(b.o) and not na(b.h) and not na(b.l) and not na(b.c)
+        float bodyHi = math.max(b.o, b.c)
+        float bodyLo = math.min(b.o, b.c)
+        p.boxes.push(box.new(leftBar, bodyHi, leftBar + 2, bodyLo, wickColor, 1,
+             bgcolor = b.psp ? pspBody : b.c >= b.o ? bullBody : bearBody))
+        p.lines.push(line.new(leftBar + 1, b.h, leftBar + 1, bodyHi, color = wickColor))
+        p.lines.push(line.new(leftBar + 1, bodyLo, leftBar + 1, b.l, color = wickColor))
+
+method link(Projection p, int x1, float y1, int x2, float y2) =>
+    if not na(y1) and not na(y2)
+        p.lines.push(smtLine(x1, y1, x2, y2))
+
+method group(Projection p, array<HtfBar> bars, int base, string name, string tag, float top) =>
+    int n = bars.size()
+    for i = 0 to n - 1
+        HtfBar b    = bars.get(i)
+        int    left = base + CANDLE_SPACE * i
+        int    mid  = left + 1
+        p.candle(left, b)
+        if b.c2Bull
+            p.labels.push(tagLabel(mid, b.l, false, C2_UP, textColor))
+        if b.c2Bear
+            p.labels.push(tagLabel(mid, b.h, true, C2_DOWN, textColor))
+        if i > 0
+            HtfBar a    = bars.get(i - 1)
+            int    aMid = mid - CANDLE_SPACE
+            if b.smtBull
+                p.link(aMid, a.l, mid, b.l)
+            if b.smtBear
+                p.link(aMid, a.h, mid, b.h)
+    if not na(top)
+        int headerX = base + int(CANDLE_SPACE * (n - 1) / 2) + 1
+        p.labels.push(label.new(headerX, top, name + "\n\n\n\n\n", xloc = xloc.bar_index, style = label.style_label_down,
+             color = TRANSPARENT, textcolor = candleText, size = textSize(htfLabelSizeIn), text_font_family = font.family_monospace))
+        p.labels.push(label.new(headerX, top, tag + "\n\n\n\n", xloc = xloc.bar_index, style = label.style_label_down,
+             color = TRANSPARENT, textcolor = candleText, size = textSize(sizeStepDown(htfLabelSizeIn)), text_font_family = font.family_monospace))
+//#endregion
+
+//#region[LOGIC]
+string autoPair    = autoSmtPair(syminfo.root)
+bool   autoPairHit = smtModeInput == "Auto" and not na(autoPair)
+string smtSymbol   = autoPairHit ? autoPair : manualSmtSymbol
+
+bool allowBull = biasInput != "Bearish"
+bool allowBear = biasInput != "Bullish"
+
+string htfTf = switch htfModel
+    "1m-15m" => "15"
+    "3m-30m" => "30"
+    "5m-1H"  => "60"
+    "15m-4H" => "240"
+    "1H-1D"  => "1D"
+    "4H-1W"  => "1W"
+    "1D-1W"  => "1W"
+    "Custom" => customHTF
+    =>          autoHTF()
+
+string htfLtf = switch htfModel
+    "1m-15m" => "1"
+    "3m-30m" => "3"
+    "5m-1H"  => "5"
+    "15m-4H" => "15"
+    "1H-1D"  => "60"
+    "4H-1W"  => "240"
+    "1D-1W"  => "1D"
+    =>          curTfCode()
+
+bool validTf = htfModel == "Auto" ? isAutoValidTf(tfMins(curTfCode())) : tfMins(curTfCode()) <= tfMins(htfLtf)
+
+[rawO, rawH, rawL, rawC] = request.security(smtSymbol, timeframe.period, [open, high, low, close], lookahead = barmerge.lookahead_off)
+
+float pairO = invert(rawO)
+float pairC = invert(rawC)
+float pairH = inverse ? invert(rawL) : rawH
+float pairL = inverse ? invert(rawH) : rawL
+
+int  htfTime       = time(htfTf)
+bool periodChanged = htfTime != htfTime[1]
+
+var array<HtfBar> htfBars = array.new<HtfBar>()
+var Projection    proj    = Projection.new(array.new<box>(), array.new<line>(), array.new<label>())
+
+var bool prevGateBull = false
+var bool prevGateBear = false
+
+var Signal c2      = Signal.new()
+var Signal smt     = Signal.new()
+var Signal psp     = Signal.new()
+var HtfBar sigCur  = na
+var HtfBar sigPrev = na
+
+bool htfClosed = false
+
+if validTf and not na(pairO)
+    if periodChanged and htfBars.size() >= 2
+        HtfBar cur  = htfBars.last()
+        HtfBar prev = htfBars.get(htfBars.size() - 2)
+
+        bool c2Bull     = cur.c2(prev, false, false) and allowBull
+        bool c2Bear     = cur.c2(prev, true,  false) and allowBear
+        bool pairC2Bull = cur.c2(prev, false, true)  and allowBull
+        bool pairC2Bear = cur.c2(prev, true,  true)  and allowBear
+
+        bool smtBull = cur.smt(prev, false)
+        bool smtBear = cur.smt(prev, true)
+        bool pspRaw  = cur.psp()
+
+        bool gateBull = c2Bull or pairC2Bull
+        bool gateBear = c2Bear or pairC2Bear
+
+        bool fireSmtBull = (gateBull or prevGateBull) and smtBull
+        bool fireSmtBear = (gateBear or prevGateBear) and smtBear
+        bool firePspBull = gateBull and pspRaw
+        bool firePspBear = gateBear and pspRaw
+
+        c2  := Signal.new(c2Bull, c2Bear, C2_UP, C2_DOWN)
+        smt := Signal.new(fireSmtBull, fireSmtBear, "+SMT", "-SMT")
+        psp := Signal.new(firePspBull, firePspBear, "PSP", "PSP")
+
+        cur.smtBull    := fireSmtBull
+        cur.smtBear    := fireSmtBear
+        cur.psp        := firePspBull or firePspBear
+        cur.c2Bull     := c2Bull
+        cur.c2Bear     := c2Bear
+        cur.pairC2Bull := pairC2Bull
+        cur.pairC2Bear := pairC2Bear
+
+        sigCur       := cur
+        sigPrev      := prev
+        htfClosed    := true
+        prevGateBull := gateBull
+        prevGateBear := gateBear
+
+    if periodChanged or htfBars.size() == 0
+        htfBars.push(HtfBar.new(open, high, low, close, bar_index, bar_index, pairO, pairH, pairL, pairC))
+        while htfBars.size() > math.max(htfCandleCount, MIN_HISTORY)
+            htfBars.shift()
+    else if htfBars.size() > 0
+        htfBars.last().extend(high, low, close, pairH, pairL, pairC)
+//#endregion
+
+//#region[VISUALS]
+if htfClosed
+    c2.pin(sigCur, textColor)
+    psp.pin(sigCur, smtColor)
+    smt.span(sigPrev, sigCur)
+
+if (barstate.islast or barstate.isrealtime) and showHtf and validTf
+    proj.clear()
+    int total = htfBars.size()
+    int n     = math.min(total, htfCandleCount)
+    if n > 0
+        float chartLo = na, float chartHi = na, float pairLo = na, float pairHi = na
+        array<HtfBar> shown = array.new<HtfBar>()
+        for i = total - n to total - 1
+            HtfBar b = htfBars.get(i)
+            shown.push(b)
+            chartLo := na(chartLo) ? b.l  : math.min(chartLo, b.l)
+            chartHi := na(chartHi) ? b.h  : math.max(chartHi, b.h)
+            pairLo  := na(pairLo)  ? b.pl : math.min(pairLo,  b.pl)
+            pairHi  := na(pairHi)  ? b.ph : math.max(pairHi,  b.ph)
+
+        array<HtfBar> mirrored = array.new<HtfBar>()
+        for b in shown
+            mirrored.push(b.pairView(pairLo, pairHi, chartLo, chartHi))
+
+        int    baseChart = bar_index + CANDLE_OFFSET + candleOffsetIn
+        int    basePair  = baseChart + CANDLE_SPACE * n + GROUP_GAP
+        string tag       = tfLabel(htfTf)
+
+        proj.group(shown,    baseChart, syminfo.ticker,         tag, chartHi)
+        proj.group(mirrored, basePair,  cleanTicker(smtSymbol), tag, chartHi)
+
+var label tfWarning = na
+
+if barstate.islast
+    label.delete(tfWarning)
+    tfWarning := na
+    if not validTf
+        tfWarning := label.new(bar_index, high, "⚠ Switch to " + tfLabel(htfLtf) + " or lower",
+             xloc = xloc.bar_index, style = label.style_label_down, color = color.new(#cc0000, 0),
+             textcolor = color.white, size = textSize(sizeStepDown(htfLabelSizeIn)))
+//#endregion
