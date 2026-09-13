@@ -1,0 +1,1984 @@
+//@version=6
+indicator("Fractal Model [Pro+]", overlay=true, max_lines_count=500, max_boxes_count=500, max_labels_count=500, max_bars_back=5000)
+
+getSMTPair() =>
+    string ticker = syminfo.ticker
+    string res = ""
+    if str.contains(ticker, "MNQ1!")
+        res := "CME_MINI:MES1!"
+    else if str.contains(ticker, "MES1!")
+        res := "CME_MINI:MNQ1!"
+    else if str.contains(ticker, "MYM1!")
+        res := "CME_MINI:MNQ1!"
+    else if str.contains(ticker, "NQ1!") or str.contains(ticker, "NDX") or str.contains(ticker, "QQQ") or ticker == "NQ"
+        res := "CME_MINI:ES1!"
+    else if str.contains(ticker, "ES1!") or str.contains(ticker, "SPX") or str.contains(ticker, "SPY") or ticker == "ES"
+        res := "CME_MINI:NQ1!"
+    else if str.contains(ticker, "YM1!")
+        res := "CME_MINI:NQ1!"
+    else if str.contains(ticker, "RTY1!")
+        res := "CBOT:YM1!"
+    else if str.contains(ticker, "NAS100")
+        res := "SPX500"
+    else if str.contains(ticker, "SPX500")
+        res := "NAS100"
+    else if str.contains(ticker, "US30")
+        res := "NAS100"
+    else if str.contains(ticker, "EURUSD")
+        res := "GBPUSD"
+    else if str.contains(ticker, "GBPUSD")
+        res := "EURUSD"
+    else if str.contains(ticker, "EURCHF")
+        res := "GBPCHF"
+    else if str.contains(ticker, "GBPCHF")
+        res := "EURCHF"
+    else if str.contains(ticker, "EURCAD")
+        res := "GBPCAD"
+    else if str.contains(ticker, "GBPCAD")
+        res := "EURCAD"
+    else if str.contains(ticker, "AUDUSD")
+        res := "NZDUSD"
+    else if str.contains(ticker, "NZDUSD")
+        res := "AUDUSD"
+    else if str.contains(ticker, "EURAUD")
+        res := "GBPAUD"
+    else if str.contains(ticker, "GBPAUD")
+        res := "EURAUD"
+    else if str.contains(ticker, "AUDCAD")
+        res := "NZDCAD"
+    else if str.contains(ticker, "NZDCAD")
+        res := "AUDCAD"
+    else if str.contains(ticker, "EURJPY")
+        res := "GBPJPY"
+    else if str.contains(ticker, "GBPJPY")
+        res := "EURJPY"
+    else if str.contains(ticker, "AUDJPY")
+        res := "NZDJPY"
+    else if str.contains(ticker, "NZDJPY")
+        res := "AUDJPY"
+    else if str.contains(ticker, "EURNZD")
+        res := "GBPNZD"
+    else if str.contains(ticker, "GBPNZD")
+        res := "EURNZD"
+    else if str.contains(ticker, "AUDCHF")
+        res := "NZDCHF"
+    else if str.contains(ticker, "NZDCHF")
+        res := "AUDCHF"
+    else if str.contains(ticker, "CADJPY")
+        res := "CHFJPY"
+    else if str.contains(ticker, "CHFJPY")
+        res := "CADJPY"
+    else if str.contains(ticker, "USDJPY")
+        res := "EURJPY"
+    else if str.contains(ticker, "USDCAD")
+        res := "EURCAD"
+    else if str.contains(ticker, "USDCHF")
+        res := "EURCHF"
+    else if str.contains(ticker, "6E1!") or ticker == "6E"
+        res := "CME:6B1!"
+    else if str.contains(ticker, "6B1!") or ticker == "6B"
+        res := "CME:6E1!"
+    else if str.contains(ticker, "6N1!") or ticker == "6N"
+        res := "CME:6A1!"
+    else if str.contains(ticker, "6A1!") or ticker == "6A"
+        res := "CME:6N1!"
+    else if str.contains(ticker, "XAUUSD")
+        res := "XAGUSD"
+    else if str.contains(ticker, "XAGUSD")
+        res := "XAUUSD"
+    else if str.contains(ticker, "XAUEUR")
+        res := "XAUUSD"
+    else if str.contains(ticker, "XAUGBP")
+        res := "COMEX:GC1!"
+    else if str.contains(ticker, "GC1!")
+        res := "XAGUSD"
+    else if str.contains(ticker, "XAGEUR")
+        res := "COMEX:SI1!"
+    else if str.contains(ticker, "XAGGBP")
+        res := "COMEX:SI1!"
+    else if str.contains(ticker, "SIL1!") or str.contains(ticker, "SI1!")
+        res := "XAGEUR"
+    else if str.contains(ticker, "CL1!")
+        res := "NYMEX:RB1!"
+    else if str.contains(ticker, "RB1!")
+        res := "NYMEX:HO1!"
+    else if str.contains(ticker, "HO1!")
+        res := "NYMEX:CL1!"
+    else if str.contains(ticker, "MBT1!")
+        res := "CME:MET1!"
+    else if str.contains(ticker, "MET1!")
+        res := "CME:MBT1!"
+    else if str.contains(ticker, "BTCUSDT") or str.contains(ticker, "BTC")
+        res := "ETHUSDT"
+    else if str.contains(ticker, "ETHUSDT") or str.contains(ticker, "ETH")
+        res := "BTCUSDT"
+    else
+        res := "CME_MINI:ES1!"
+    res
+
+var string LINE_STYLE_SOLID = line.style_solid
+var string LINE_STYLE_DASHED = line.style_dashed
+var string LINE_STYLE_DOTTED = line.style_dotted
+
+var string SIZE_TINY = size.tiny
+var string SIZE_SMALL = size.small
+var string SIZE_NORMAL = size.normal
+var string SIZE_LARGE = size.large
+var string SIZE_HUGE = size.huge
+
+type Candle
+    float           o
+    float           c
+    float           h
+    float           l
+    int             o_idx
+    int             c_idx
+    int             h_idx
+    int             l_idx
+    box             body
+    line            wick_up
+    line            wick_down
+
+type Trace
+    line            o
+    line            c
+    line            h
+    line            l
+    label           o_l
+    label           c_l
+    label           h_l
+    label           l_l
+
+type Imbalance
+    box             b
+    int             idx
+
+type TTFMEvent
+    bool            is_bullish
+    float           invalid_level
+    int             created_bar
+    int             formation_bars
+    bool            failed
+    bool            consolidating
+    label           c2_lbl
+    label           c3_lbl
+    box             tspot_bx
+    line            tspot_ml
+
+type LiquidityLine
+    line    ln
+    float   level
+    bool    is_bullish
+    bool    active
+    int     start_bar
+
+type SMT
+    string smtType
+    string smtPair
+    float prevChartHigh
+    float currChartHigh
+    int prevChartHighTime
+    int currChartHighTime
+    float prevChartLow
+    float currChartLow
+    int prevChartLowTime
+    int currChartLowTime
+    bool confirmed
+    int creationBar
+    line smtLine
+    label smtLabel
+
+type CandleSettings
+    bool            show
+    string          htf
+    int             max_display
+
+type Settings
+    int             max_sets
+    color           bull_body
+    color           bull_border
+    color           bull_wick
+    color           bear_body
+    color           bear_border
+    color           bear_wick
+    int             offset
+    int             buffer
+    int             htf_buffer
+    int             width
+    bool            trace_show
+    color           trace_o_color
+    string          trace_o_style
+    int             trace_o_size
+    color           trace_c_color
+    string          trace_c_style
+    int             trace_c_size
+    color           trace_h_color
+    string          trace_h_style
+    int             trace_h_size
+    color           trace_l_color
+    string          trace_l_style
+    int             trace_l_size
+    string          trace_anchor
+    bool            label_show
+    color           label_color
+    string          label_size
+    bool            fvg_show
+    color           fvg_color
+    bool            pfvg_show
+    color           pfvg_color
+    bool            pfvg_show_all
+    int             pfvg_max_display
+    bool            pfvg_only_with_tspot
+    bool            vi_show
+    color           vi_color
+    bool            htf_label_show
+    color           htf_label_color
+    string          htf_label_size
+    bool            htf_timer_show
+    color           htf_timer_color
+    string          htf_timer_size
+    bool            htf_line_show
+    color           htf_line_color
+    int             htf_line_width
+    string          htf_line_style
+    int             midline_width
+    bool            show_chart_sweeps
+
+type CandleSet
+    Candle[]        candles
+    Imbalance[]     imbalances
+    CandleSettings  settings
+    label           tfName
+    label           tfTimer
+    line[]          htf_starts
+    float           y_shift = 0.0
+
+type Helper
+    string name             = "Helper"
+
+Settings settings           = Settings.new()
+
+var CandleSettings SettingsHTF1 = CandleSettings.new()
+var CandleSettings SettingsHTF2 = CandleSettings.new()
+var CandleSettings SettingsHTF3 = CandleSettings.new()
+
+var Candle[] candles_1        = array.new<Candle>(0)
+var Candle[] candles_2        = array.new<Candle>(0)
+var Candle[] candles_3        = array.new<Candle>(0)
+
+var Imbalance[] imbalances_1    = array.new<Imbalance>()
+var Imbalance[] imbalances_2    = array.new<Imbalance>()
+var Imbalance[] imbalances_3    = array.new<Imbalance>()
+
+var CandleSet htf1          = CandleSet.new()
+htf1.settings               := SettingsHTF1
+htf1.candles                := candles_1
+htf1.imbalances             := imbalances_1
+htf1.htf_starts            := array.new<line>()
+
+var CandleSet htf2          = CandleSet.new()
+htf2.settings               := SettingsHTF2
+htf2.candles                := candles_2
+htf2.imbalances             := imbalances_2
+htf2.htf_starts            := array.new<line>()
+
+var CandleSet htf3          = CandleSet.new()
+htf3.settings               := SettingsHTF3
+htf3.candles                := candles_3
+htf3.imbalances             := imbalances_3
+htf3.htf_starts            := array.new<line>()
+
+ui_alerts = input.bool(true, "Alerts?", tooltip="Enable Alerts", group="GENERAL SETTINGS")
+ui_history = input.int(2, "History", minval=0, maxval=40, tooltip="Number of previous Fractal Model setups (T-Spot / C2 / C3 / C4 / CISD / Projections) to keep on the chart. 0 = current setup only.", group="GENERAL SETTINGS")
+
+ui_fractal = input.string("Automatic...", "Fractal", options=["Automatic...", "Custom"], inline="gen_frac", tooltip="Fractal Mode", group="GENERAL SETTINGS")
+ui_c2 = input.bool(true, "C2", inline="gen_frac", group="GENERAL SETTINGS")
+ui_c3 = input.bool(true, "C3", inline="gen_frac", group="GENERAL SETTINGS")
+ui_c4 = input.bool(true, "C4", inline="gen_frac", tooltip="C settings", group="GENERAL SETTINGS")
+
+ui_bias = input.string("Neutral", "Bias", options=["Neutral", "Bullish", "Bearish", "Auto Bias 1", "Auto Bias 2"], inline="gen_bias", tooltip="Bias settings", group="GENERAL SETTINGS")
+
+ui_apply_below = input.string("1 hour", "Apply below", options=["1 hour", "4 hours", "Daily"], inline="tf_app", tooltip="Apply Time Filter", group="TIME FILTER")
+ui_filter1_en = input.bool(false, "Filter 1", inline="tf_f1", group="TIME FILTER")
+ui_filter1_time = input.session("02:00-05:00", "", inline="tf_f1", group="TIME FILTER")
+ui_filter2_en = input.bool(false, "Filter 2", inline="tf_f2", group="TIME FILTER")
+ui_filter2_time = input.session("08:00-11:00", "", inline="tf_f2", group="TIME FILTER")
+ui_filter3_en = input.bool(false, "Filter 3", inline="tf_f3", group="TIME FILTER")
+ui_filter3_time = input.session("13:30-16:15", "", inline="tf_f3", group="TIME FILTER")
+
+ui_htf_size = input.string("Small", "Size", options=["Small", "Normal", "Large"], inline="htf_sz", group="HTF CANDLES")
+ui_htf_hide = input.bool(false, "Hide?", inline="htf_sz", group="HTF CANDLES")
+
+ui_offset = input.int(12, "Offset", group="HTF CANDLES")
+htf_line_extension = input.float(5.0, "HTF Line Extension (Length)", minval=0.5, step=0.5, group="HTF CANDLES", tooltip="Adjust the vertical line extension from the top and bottom of the HTF candle")
+
+ui_body_up = input.color(color.new(#70a880, 0), "Body", inline="htf_bdy", group="HTF CANDLES")
+ui_body_dn = input.color(color.new(#000000, 0), "", inline="htf_bdy", group="HTF CANDLES")
+
+ui_border_up = input.color(color.new(#5d606b, 0), "Border", inline="htf_brd", group="HTF CANDLES")
+ui_border_dn = input.color(color.new(#000000, 0), "", inline="htf_brd", group="HTF CANDLES")
+
+ui_wick_up = input.color(color.new(#5d606b, 0), "Wick", inline="htf_wck", group="HTF CANDLES")
+ui_wick_dn = input.color(color.new(#5d606b, 0), "", inline="htf_wck", group="HTF CANDLES")
+
+ui_show_ttfm = input.bool(true, "Show TTFM Labels?", inline="mdl_ttfm", group="MODEL STYLE")
+ui_ttfm_size = input.string("Small", "", options=["Tiny", "Small", "Normal", "Large", "Huge"], inline="mdl_ttfm", group="MODEL STYLE")
+
+ui_c1_sweep_col = input.color(color.black, "", inline="mdl_sw", group="MODEL STYLE")
+ui_c1_sweep_en = input.bool(true, "Candle 1 Sweep", inline="mdl_sw", group="MODEL STYLE")
+ui_c1_sweep_sty = input.string("Solid", "", options=["Solid", "Dashed", "Dotted"], inline="mdl_sw", group="MODEL STYLE")
+ui_c1_sweep_wid = input.int(1, "Width", inline="mdl_sw", group="MODEL STYLE")
+
+ui_bull_cisd_col = input.color(#3b3eff, "", inline="mdl_bu", group="MODEL STYLE")
+ui_bull_cisd_en = input.bool(true, "Bullish CISD", inline="mdl_bu", group="MODEL STYLE")
+ui_bull_cisd_sty = input.string("Solid", "", options=["Solid", "Dashed", "Dotted"], inline="mdl_bu", group="MODEL STYLE")
+ui_bull_cisd_wid = input.int(2, "Width", inline="mdl_bu", group="MODEL STYLE")
+
+ui_bear_cisd_col = input.color(#f33030, "", inline="mdl_be", group="MODEL STYLE")
+ui_bear_cisd_en = input.bool(true, "Bearish CISD", inline="mdl_be", group="MODEL STYLE")
+ui_bear_cisd_sty = input.string("Solid", "", options=["Solid", "Dashed", "Dotted"], inline="mdl_be", group="MODEL STYLE")
+ui_bear_cisd_wid = input.int(2, "Width", inline="mdl_be", group="MODEL STYLE")
+
+ui_cisd_max = input.int(2, "CISD Max History", minval=1, group="MODEL STYLE")
+
+ui_prot_swing_en = input.bool(true, "Show Protected Swing Dot", inline="mdl_ps", group="MODEL STYLE")
+ui_prot_swing_sz = input.string("Small", "Size", options=["Tiny", "Small", "Normal", "Large", "Huge"], inline="mdl_ps", group="MODEL STYLE")
+
+ui_eq_sty = input.string("Dotted", "Equilibrium Line Style", options=["Solid", "Dashed", "Dotted"], inline="mdl_eq", group="MODEL STYLE")
+ui_eq_wid = input.int(1, "Width", inline="mdl_eq", group="MODEL STYLE")
+
+ui_tspot_en = input.bool(true, "T-Spot", inline="mdl_ts", group="MODEL STYLE")
+ui_tspot_c1 = input.color(color.new(#00ff33, 95), "", inline="mdl_ts", group="MODEL STYLE")
+ui_tspot_c2 = input.color(color.new(#000000, 95), "", inline="mdl_ts", group="MODEL STYLE")
+
+ui_proj_en = input.bool(true, "Projections", inline="ob_p1", group="ORDERBLOCK PROJECTIONS")
+ui_proj_lvl = input.string("1, 2, 2.5", "", tooltip="Projection Levels", inline="ob_p1", group="ORDERBLOCK PROJECTIONS")
+
+ui_proj_lbl_en = input.bool(true, "Labels?", inline="ob_p2", group="ORDERBLOCK PROJECTIONS")
+ui_proj_lbl_sz = input.string("Small", "", options=["Tiny", "Small", "Normal", "Large", "Huge"], inline="ob_p2", group="ORDERBLOCK PROJECTIONS")
+
+ui_proj_ln_en = input.bool(false, "Lines?", inline="ob_p3", group="ORDERBLOCK PROJECTIONS")
+ui_proj_ln_col = input.color(color.gray, "", inline="ob_p3", group="ORDERBLOCK PROJECTIONS")
+ui_proj_ln_sty = input.string("Solid", "", options=["Solid", "Dashed", "Dotted"], inline="ob_p3", group="ORDERBLOCK PROJECTIONS")
+ui_proj_ln_wid = input.int(1, "Width", inline="ob_p3", group="ORDERBLOCK PROJECTIONS")
+
+enableSMT         = input.bool(true, 'Enable SMT Detection', group = 'SMT Settings')
+smtAutoMode       = input.bool(true, 'SMT Auto Pair', group = 'SMT Settings')
+smtManualPair     = input.symbol('', 'SMT Manual Pair', group = 'SMT Settings')
+smtLineWidth      = input.int(1, 'SMT Line Width', minval = 1, group = 'SMT Settings')
+smtKeepOnlyLatest = input.bool(true, 'Keep Only Latest SMTs', group = 'SMT Settings')
+smtShowLabel      = input.bool(true, 'Show SMT Labels', group = 'SMT Settings')
+smtColor          = input.color(color.rgb(204, 162, 9), 'SMT Color', group = 'SMT Settings')
+
+ui_fl_en = input.bool(true, "", inline="fl_1", group="FORMATION LIQUIDITY")
+ui_fl_col = input.color(color.black, "", inline="fl_1", group="FORMATION LIQUIDITY")
+ui_fl_sty = input.string("Dotted", "", options=["Solid", "Dashed", "Dotted"], inline="fl_1", group="FORMATION LIQUIDITY")
+ui_fl_wid = input.int(1, "Width", inline="fl_1", group="FORMATION LIQUIDITY")
+ui_fl_max = input.int(5, "Max Active Lines", group="FORMATION LIQUIDITY", tooltip="Max untouched liquidity lines to display")
+
+ui_info_en = input.bool(true, "Show Info?", inline="tbl_1", group="FRACTAL MODEL INFO TABLE")
+ui_info_sz = input.string("Small", "", options=["Tiny", "Small", "Normal", "Large", "Huge"], inline="tbl_1", group="FRACTAL MODEL INFO TABLE")
+ui_info_brd = input.bool(true, "Border?", tooltip="Show Border", inline="tbl_1", group="FRACTAL MODEL INFO TABLE")
+
+ui_tbl_loc_v = input.string("Bottom", "Table Location", options=["Top", "Middle", "Bottom"], inline="tbl_2", group="FRACTAL MODEL INFO TABLE")
+ui_tbl_loc_h = input.string("Right", "", options=["Left", "Center", "Right"], inline="tbl_2", group="FRACTAL MODEL INFO TABLE")
+
+ui_tbl_ch_en = input.bool(true, "Chart Timeframe", inline="tbl_3", group="FRACTAL MODEL INFO TABLE")
+ui_tbl_ast_en = input.bool(true, "Asset", inline="tbl_3", group="FRACTAL MODEL INFO TABLE")
+
+ui_tbl_frc_en = input.bool(true, "Fractal", inline="tbl_4", group="FRACTAL MODEL INFO TABLE")
+ui_tbl_ttc_en = input.bool(true, "Time to Close", inline="tbl_4", group="FRACTAL MODEL INFO TABLE")
+ui_tbl_bias_en = input.bool(true, "Bias", inline="tbl_4", group="FRACTAL MODEL INFO TABLE")
+ui_tbl_tf_en = input.bool(false, "Time Filter", inline="tbl_4", group="FRACTAL MODEL INFO TABLE")
+
+TEMPLATE_COLOR = color.rgb(0, 0, 0)
+htf_mode = ui_fractal == "Automatic..." ? "Auto" : "Custom"
+tspot_bias = ui_bias
+use_actual_day_change = false
+
+layout_mode = input.string("Horizontal Next-to-Each-Other", "HTF Candles Layout", options=["Horizontal Next-to-Each-Other", "Vertical Stacked (Same Offset)"], group="HTF CANDLES")
+vertical_gap_mult = input.float(1.2, "Vertical Stacked Gap Multiplier", minval=0.1, step=0.1, group="HTF CANDLES")
+
+htf1_max = input.int(6, "Primary HTF Candle Count", minval=1, maxval=50, group="HTF CANDLES")
+htf2_max = input.int(4, "Second HTF Candle Count", minval=0, maxval=50, group="HTF CANDLES")
+htf3_max = input.int(0, "Third HTF Candle Count", minval=0, maxval=50, group="HTF CANDLES")
+
+i_enableSingleHTF = input.bool(false, "Enable Single HTF Mode (Isolate)", group="HTF CANDLES", tooltip="When enabled, only the selected timeframe below will be shown, hiding all other HTF sets.")
+i_singleHTFTf     = input.string("4 hours", "Single HTF Timeframe", options=["15 minutes", "30 minutes", "45 minutes", "1 hour", "2 hours", "3 hours", "4 hours", "6 hours", "7 hours", "9 hours", "1 day", "1 week", "1 month"], group="HTF CANDLES", tooltip="Select the specific timeframe you want to display on the chart.")
+i_singleHTFMax    = input.int(6, "Single HTF Candle Count", minval=1, maxval=50, group="HTF CANDLES")
+
+float chart_sec = timeframe.in_seconds(timeframe.period)
+string h1 = "", string h2 = "", string h3 = ""
+
+if htf_mode == "Auto"
+    if chart_sec <= 60
+        h1 := "15", h2 := "30", h3 := "60"
+    else if chart_sec <= 180
+        h1 := "30", h2 := "60", h3 := "240"
+    else if chart_sec <= 300
+        h1 := "60", h2 := "240", h3 := "D"
+    else if chart_sec <= 900
+        h1 := "240", h2 := "D", h3 := "W"
+    else if chart_sec <= 1800
+        h1 := "240", h2 := "D", h3 := "W"
+    else if chart_sec <= 3600
+        h1 := "D", h2 := "W", h3 := "M"
+    else if chart_sec <= 14400
+        h1 := "W", h2 := "M", h3 := ""
+    else if chart_sec <= 86400
+        h1 := "M", h2 := "", h3 := ""
+    else
+        h1 := "M", h2 := "", h3 := ""
+else
+    h1 := "W", h2 := "M", h3 := "D"
+
+string resolved_single_tf = switch i_singleHTFTf
+    "15 minutes" => "15"
+    "30 minutes" => "30"
+    "45 minutes" => "45"
+    "1 hour"     => "60"
+    "2 hours"    => "120"
+    "3 hours"    => "180"
+    "4 hours"    => "240"
+    "6 hours"    => "360"
+    "7 hours"    => "420"
+    "9 hours"    => "540"
+    "1 day"      => "D"
+    "1 week"     => "W"
+    "1 month"    => "M"
+    => "240"
+
+int final_htf1_max = htf1_max
+int final_htf2_max = htf2_max
+int final_htf3_max = htf3_max
+
+if i_enableSingleHTF
+    h1 := resolved_single_tf
+    h2 := ""
+    h3 := ""
+    final_htf1_max := i_singleHTFMax
+    final_htf2_max := 0
+    final_htf3_max := 0
+
+htf1.settings.show := true
+htf1.settings.htf  := h1
+htf1.settings.max_display := final_htf1_max
+
+htf2.settings.show := h2 != "" and final_htf2_max > 0
+htf2.settings.htf  := h2
+htf2.settings.max_display := final_htf2_max
+
+htf3.settings.show := h3 != "" and final_htf3_max > 0
+htf3.settings.htf  := h3
+htf3.settings.max_display := final_htf3_max
+
+settings.max_sets := 3
+
+settings.bull_body       := ui_body_up
+settings.bear_body       := ui_body_dn
+settings.bull_border     := ui_border_up
+settings.bear_border     := ui_border_dn
+settings.bull_wick       := ui_wick_up
+settings.bear_wick       := ui_wick_dn
+
+settings.offset          := ui_offset
+settings.buffer          := 1
+settings.htf_buffer      := 8
+settings.width           := 1*2
+
+settings.fvg_show        := true
+settings.fvg_color       := color.new(color.gray, 80)
+settings.vi_show         := true
+settings.vi_color        := color.new(color.orange, 50)
+settings.pfvg_show       := false
+settings.pfvg_color      := color.new(color.blue, 60)
+settings.pfvg_show_all   := false
+settings.pfvg_max_display := 4
+settings.pfvg_only_with_tspot := false
+
+show_tspot = ui_tspot_en
+tspot_bull_box_color = ui_tspot_c1
+tspot_bear_box_color = ui_tspot_c2
+tspot_line_style = ui_eq_sty == "Solid" ? LINE_STYLE_SOLID : (ui_eq_sty == "Dashed" ? LINE_STYLE_DASHED : LINE_STYLE_DOTTED)
+settings.midline_width := ui_eq_wid
+tspot_transparency = 90
+
+show_tspot_close_line = false
+history_max = math.max(ui_history, 1)
+show_silver_tspot = false
+hide_against_tspots = true
+delete_against_tspots = false
+
+show_tspot_sweeps = true
+usebody_for_confirmation = true
+show_confirmation_lines = true
+conf_line_color = color.new(#0f33ff, 0)
+conf_line_width = 1
+confirmation_line_style = LINE_STYLE_SOLID
+
+tspot_sweep_label_color = color.white
+tspot_sweep_label_size = SIZE_TINY
+
+show_ttfm_labels = ui_show_ttfm
+ttfm_label_size = ui_ttfm_size == "Tiny" ? SIZE_TINY : ui_ttfm_size == "Small" ? SIZE_SMALL : ui_ttfm_size == "Normal" ? SIZE_NORMAL : ui_ttfm_size == "Large" ? SIZE_LARGE : SIZE_HUGE
+
+settings.htf_label_show  := true
+settings.htf_label_color := color.black
+settings.htf_label_size  := SIZE_NORMAL
+settings.htf_timer_show  := true
+settings.htf_timer_color := color.black
+settings.htf_timer_size  := SIZE_NORMAL
+settings.htf_line_show   := true
+settings.htf_line_color  := color.rgb(0, 0, 0, 85)
+settings.htf_line_width  := 1
+settings.htf_line_style  := LINE_STYLE_SOLID
+
+settings.trace_show      := false
+settings.trace_o_color   := color.new(color.gray, 50)
+settings.trace_o_style   := LINE_STYLE_DOTTED
+settings.trace_o_size    := 1
+settings.trace_c_color   := color.new(color.gray, 50)
+settings.trace_c_style   := LINE_STYLE_DOTTED
+settings.trace_c_size    := 1
+settings.trace_h_color   := color.new(color.gray, 50)
+settings.trace_h_style   := LINE_STYLE_DOTTED
+settings.trace_h_size    := 1
+settings.trace_l_color   := color.new(color.gray, 50)
+settings.trace_l_style   := LINE_STYLE_DOTTED
+settings.trace_l_size    := 1
+settings.trace_anchor    := "First Timeframe"
+
+settings.label_show      := false
+settings.label_color     := color.new(#eaeaea, 10)
+settings.label_size      := size.small
+
+show_info_table = ui_info_en
+table_position = ui_tbl_loc_v + " " + ui_tbl_loc_h
+table_bg_color = color.new(color.gray, 100)
+table_border_color = ui_info_brd ? color.black : color.new(color.white, 100)
+table_text_color = color.black
+info_text_size = ui_info_sz == "Tiny" ? SIZE_TINY : ui_info_sz == "Small" ? SIZE_SMALL : ui_info_sz == "Normal" ? SIZE_NORMAL : ui_info_sz == "Large" ? SIZE_LARGE : SIZE_HUGE
+table_border_width = ui_info_brd ? 1 : 0
+table_frame_color = color.black
+table_frame_width = 0
+
+show_projections = ui_proj_en
+projection_color = ui_proj_ln_col
+projection_levels = ui_proj_lvl
+extend_latest_projections = true
+projection_label_size = ui_proj_lbl_sz == "Tiny" ? SIZE_TINY : ui_proj_lbl_sz == "Small" ? SIZE_SMALL : ui_proj_lbl_sz == "Normal" ? SIZE_NORMAL : ui_proj_lbl_sz == "Large" ? SIZE_LARGE : SIZE_HUGE
+
+var float chartPivotHigh = na, var float chartPivotLow = na
+var int chartPivotHighTime = na, var int chartPivotLowTime = na
+var float smtPivotHigh = na, var float smtPivotLow = na
+var float prevChartPivotHigh = na, var float prevChartPivotLow = na
+var int prevChartPivotHighTime = na, var int prevChartPivotLowTime = na
+var float prevSmtPivotHigh = na, var float prevSmtPivotLow = na
+
+var smtArray = array.new<SMT>()
+var smtLabels = array.new<label>()
+var float prevCH_smt = na, var int prevCHT_smt = na
+var float currCH_smt = na, var int currCHT_smt = na
+var float prevCL_smt = na, var int prevCLT_smt = na
+var float currCL_smt = na, var int currCLT_smt = na
+var line liveBearSmtL = na
+var line liveBullSmtL = na
+
+var line[] htf_lines = array.new_line(0)
+var label[] htf_labels = array.new_label(0)
+var label[] htf_labels_bottom = array.new_label(0)
+var box[] tspot_boxes = array.new_box(0)
+var line[] fl_lines = array.new_line(0)
+var LiquidityLine[] active_liq_lines = array.new<LiquidityLine>()
+
+add_liquidity_line(int s_bar, float level, bool is_bullish, color col, string style_str, int wid, int max_lines) =>
+    fl_style = style_str == "Dashed" ? line.style_dashed : style_str == "Solid" ? line.style_solid : line.style_dotted
+    bool exists = false
+    if array.size(active_liq_lines) > 0
+        for i = 0 to array.size(active_liq_lines) - 1
+            LiquidityLine ll = array.get(active_liq_lines, i)
+            if math.abs(ll.level - level) < 1e-7
+                exists := true
+                break
+    if not exists
+        line ln = line.new(s_bar, level, bar_index, level, color=col, style=fl_style, width=wid)
+        LiquidityLine ll = LiquidityLine.new(ln, level, is_bullish, true, s_bar)
+        array.unshift(active_liq_lines, ll)
+        if array.size(active_liq_lines) > max_lines
+            LiquidityLine oldest = array.pop(active_liq_lines)
+            line.delete(oldest.ln)
+
+var line[] tspot_midlines = array.new_line(0)
+var line[] tspot_closelines = array.new_line(0)
+var line[] sweep_lines = array.new_line(0)
+var line[] chart_sweep_lines = array.new_line(0)
+var line[] midpoint_lines = array.new_line(0)
+var label[] c2_labels = array.new_label(0)
+
+var label[] c3_labels = array.new_label(0)
+var line[] confirmation_lines = array.new_line(0)
+var TTFMEvent[] ttfm_events = array.new<TTFMEvent>()
+
+var table info_table = na
+
+var bool tspot_touched = false
+var string tspot_type = ""
+var float tspot_level = 0.0
+var int touch_bar = 0
+var int last_tspot_start_bar = 0
+var float last_pivot_high = na
+var float last_pivot_low = na
+var int last_pivot_high_bar = 0
+var int last_pivot_low_bar = 0
+
+var int current_table_rows = 3
+
+findLevelBarIndex(target_level, max_bars_back) =>
+    var int found_bar = 0
+    for i = 0 to max_bars_back
+        if high[i] == target_level or low[i] == target_level
+            found_bar := bar_index - i
+            break
+    found_bar
+
+find_exact_high_bar(float target_price, int max_back) =>
+    int found_bar = na
+    for i = 0 to math.min(max_back, 4999)
+        if math.abs(high[i] - target_price) < 1e-7
+            found_bar := bar_index - i
+            break
+    found_bar
+
+find_exact_low_bar(float target_price, int max_back) =>
+    int found_bar = na
+    for i = 0 to math.min(max_back, 4999)
+        if math.abs(low[i] - target_price) < 1e-7
+            found_bar := bar_index - i
+            break
+    found_bar
+
+var array<line> projection_lines = array.new<line>()
+var array<label> projection_labels = array.new<label>()
+var array<line> cisd_lines = array.new<line>()
+var array<label> protected_swing_labels = array.new<label>()
+
+detectCISDAndProjections(int c2_bar, float c2_extreme_level, bool is_bullish, int end_bar) =>
+    series_high = usebody_for_confirmation ? math.max(open[bar_index - c2_bar], close[bar_index - c2_bar]) : c2_extreme_level
+    series_low = usebody_for_confirmation ? math.min(open[bar_index - c2_bar], close[bar_index - c2_bar]) : c2_extreme_level
+    series_count = 0
+
+    series_count := 1
+
+    float true_extreme_val = is_bullish ? low[bar_index - c2_bar] : high[bar_index - c2_bar]
+    int true_extreme_bar = c2_bar
+
+    for i = 1 to 20
+        check_bar = c2_bar - i
+        if check_bar < 0
+            break
+
+        is_bullish_candle = close[bar_index - check_bar] > open[bar_index - check_bar]
+
+        if is_bullish
+            if not is_bullish_candle
+                candle_high = usebody_for_confirmation ? math.max(open[bar_index - check_bar], close[bar_index - check_bar]) : high[bar_index - check_bar]
+                candle_low = usebody_for_confirmation ? math.min(open[bar_index - check_bar], close[bar_index - check_bar]) : low[bar_index - check_bar]
+                series_high := math.max(series_high, candle_high)
+                series_low := math.min(series_low, candle_low)
+                if low[bar_index - check_bar] < true_extreme_val
+                    true_extreme_val := low[bar_index - check_bar]
+                    true_extreme_bar := check_bar
+                series_count += 1
+            else
+                break
+        else
+            if is_bullish_candle
+                candle_high = usebody_for_confirmation ? math.max(open[bar_index - check_bar], close[bar_index - check_bar]) : high[bar_index - check_bar]
+                candle_low = usebody_for_confirmation ? math.min(open[bar_index - check_bar], close[bar_index - check_bar]) : low[bar_index - check_bar]
+                series_high := math.max(series_high, candle_high)
+                series_low := math.min(series_low, candle_low)
+                if high[bar_index - check_bar] > true_extreme_val
+                    true_extreme_val := high[bar_index - check_bar]
+                    true_extreme_bar := check_bar
+                series_count += 1
+            else
+                break
+
+    series_broken = false
+    break_bar = 0
+
+    for i = 0 to (bar_index - c2_bar)
+        check_bar = c2_bar + i
+        if check_bar > bar_index
+            break
+
+        if is_bullish
+            if close[bar_index - check_bar] > series_high
+                series_broken := true
+                break_bar := check_bar
+                break
+        else
+            if close[bar_index - check_bar] < series_low
+                series_broken := true
+                break_bar := check_bar
+                break
+
+    if series_broken
+        bool dir_cisd_enabled = is_bullish ? ui_bull_cisd_en : ui_bear_cisd_en
+        if dir_cisd_enabled
+            color  dir_cisd_color = is_bullish ? ui_bull_cisd_col : ui_bear_cisd_col
+            int    dir_cisd_width = is_bullish ? ui_bull_cisd_wid : ui_bear_cisd_wid
+            string dir_cisd_sty   = is_bullish ? ui_bull_cisd_sty : ui_bear_cisd_sty
+            string dir_cisd_style = dir_cisd_sty == "Dashed" ? line.style_dashed : dir_cisd_sty == "Dotted" ? line.style_dotted : line.style_solid
+
+            series_extreme = is_bullish ? series_high : series_low
+            last_series_bar = c2_bar - (series_count - 1)
+            cisd_line = line.new(last_series_bar, series_extreme, break_bar, series_extreme, color=dir_cisd_color, style=dir_cisd_style, width=dir_cisd_width)
+            array.unshift(cisd_lines, cisd_line)
+
+            if array.size(cisd_lines) > ui_cisd_max
+                line.delete(array.pop(cisd_lines))
+
+            if ui_prot_swing_en
+                string label_sz_input = ui_prot_swing_sz == "Tiny" ? size.tiny : ui_prot_swing_sz == "Small" ? size.small : ui_prot_swing_sz == "Normal" ? size.normal : ui_prot_swing_sz == "Large" ? size.large : size.huge
+                string lbl_style = is_bullish ? label.style_label_up : label.style_label_down
+                prot_swing_lbl = label.new(true_extreme_bar, true_extreme_val, "●", color=color.new(color.white, 100), textcolor=dir_cisd_color, style=lbl_style, size=label_sz_input)
+                array.unshift(protected_swing_labels, prot_swing_lbl)
+                
+                if array.size(protected_swing_labels) > ui_cisd_max
+                    label.delete(array.pop(protected_swing_labels))
+
+        if show_projections
+            if array.size(projection_lines) > 0
+                for ln in projection_lines
+                    line.delete(ln)
+                array.clear(projection_lines)
+            if array.size(projection_labels) > 0
+                for lbl in projection_labels
+                    label.delete(lbl)
+                array.clear(projection_labels)
+
+            series_range = series_high - series_low
+            if series_range > 0
+                break_price = is_bullish ? series_high : series_low
+                left_anchor_bar = c2_bar - (series_count - 1)
+                levels = str.split(projection_levels, ",")
+                proj_line_style = ui_proj_ln_sty == "Dashed" ? line.style_dashed : ui_proj_ln_sty == "Solid" ? line.style_solid : line.style_dotted
+                for i = 0 to array.size(levels) - 1
+                    level_str = str.trim(array.get(levels, i))
+                    if level_str != ""
+                        level = str.tonumber(level_str)
+                        if not na(level)
+                            proj_price = is_bullish ? break_price + (series_range * level) : break_price - (series_range * level)
+                            if ui_proj_ln_en
+                                proj_line = line.new(left_anchor_bar, proj_price, bar_index, proj_price, color=projection_color, style=proj_line_style, width=ui_proj_ln_wid)
+                                array.unshift(projection_lines, proj_line)
+                            if ui_proj_lbl_en
+                                string formatted_level = level > 0 ? "-" + str.tostring(level) : str.tostring(level)
+                                proj_label = label.new(left_anchor_bar, proj_price, formatted_level, color=color.new(color.white, 100), textcolor=projection_color, style=label.style_label_right, size=projection_label_size, text_font_family=font.family_monospace)
+                                array.unshift(projection_labels, proj_label)
+
+Helper    helper        = Helper.new()
+var Trace trace         = Trace.new()
+color color_transparent = #ffffff00
+
+var string resolved_bias = "Neutral"
+
+method LineStyle(Helper helper, string style) =>
+    helper.name := style
+    switch style
+        '----' => line.style_dashed
+        '····' => line.style_dotted
+        => line.style_solid
+
+method ValidTimeframe(Helper helper, string HTF) =>
+    helper.name := HTF
+    if timeframe.in_seconds(HTF) >= timeframe.in_seconds("1D") and timeframe.in_seconds(HTF) > timeframe.in_seconds()
+        true
+    else
+        n1 = timeframe.in_seconds()
+        n2 = timeframe.in_seconds(HTF)
+        n3 = n1 % n2
+        (n1 < n2 and math.round(n2/n1) == n2/n1)
+
+method RemainingTime(Helper helper, string HTF) =>
+    helper.name     := HTF
+    if barstate.isrealtime
+        timeRemaining   = (time_close(HTF) - timenow)/1000
+        days            = math.floor(timeRemaining / 86400)
+        hours           = math.floor((timeRemaining - (days*86400)) / 3600)
+        minutes         = math.floor((timeRemaining - (days*86400) - (hours*3600))/ 60)
+        seconds         = math.floor(timeRemaining - (days*86400) - (hours*3600) - (minutes*60))
+
+        r = str.tostring(seconds, "00")
+        if minutes > 0 or hours > 0 or days > 0
+            r := str.tostring(minutes, "00") + ":" + r
+        if hours > 0 or days > 0
+            r := str.tostring(hours, "00") + ":" + r
+        if days > 0
+            r := str.tostring(days) + "D " + r
+        r
+    else
+        "n/a"
+
+method HTFName(Helper helper, string HTF) =>
+    helper.name := "HTFName"
+    formatted = HTF
+    seconds = timeframe.in_seconds(HTF)
+    if seconds < 60
+        formatted := str.tostring(seconds) + "S"
+    else if (seconds / 60) < 60
+        formatted := str.tostring((seconds/60)) + "M"
+    else if (seconds/60/60) < 24
+        formatted := str.tostring((seconds/60/60)) + "H"
+    formatted
+
+method GetCurrentTimeframe(Helper helper) =>
+    helper.name := "GetCurrentTimeframe"
+    current_seconds = timeframe.in_seconds()
+    if current_seconds < 60
+        str.tostring(current_seconds) + "S"
+    else if (current_seconds / 60) < 60
+        str.tostring((current_seconds/60)) + "M"
+    else if (current_seconds/60/60) < 24
+        str.tostring((current_seconds/60/60)) + "H"
+    else
+        str.tostring((current_seconds/60/60/24)) + "D"
+
+method GetCurrentBias(Helper helper) =>
+    helper.name := "GetCurrentBias"
+    if tspot_bias == "Bullish"
+        "Bias: Bullish"
+    else if tspot_bias == "Bearish"
+        "Bias: Bearish"
+    else
+        "Bias: Neutral"
+
+method GetHTFBias(Helper helper, Candle last_closed, Candle prev_closed) =>
+    helper.name := "GetHTFBias"
+
+    if na(last_closed) or na(prev_closed)
+        "Bias: Neutral"
+    else
+        last_close = last_closed.c
+        prev_close = prev_closed.c
+        last_high = last_closed.h
+        last_low = last_closed.l
+        prev_high = prev_closed.h
+        prev_low = prev_closed.l
+        last_open = last_closed.o
+
+        swept_high = last_high > prev_high
+        swept_low = last_low < prev_low
+
+        if last_close > prev_high
+            "Bias: Bullish"
+        else if last_close < prev_low
+            "Bias: Bearish"
+        else if swept_high and last_close < prev_high
+            "Bias: Bearish"
+        else if swept_low and last_close > prev_low
+            "Bias: Bullish"
+        else if not swept_high and not swept_low
+            "Bias: Neutral"
+        else if swept_high and swept_low
+            upper_wick = last_high - math.max(last_open, last_close)
+            lower_wick = math.min(last_open, last_close) - last_low
+            if lower_wick > upper_wick
+                "Bias: Bearish"
+            else if upper_wick > lower_wick
+                "Bias: Bullish"
+            else
+                "Bias: Neutral"
+        else
+            "Bias: Neutral"
+
+method GetTablePosition(Helper helper, string position) =>
+    helper.name := "GetTablePosition"
+    switch position
+        'Top Left' => position.top_left
+        'Top Center' => position.top_center
+        'Top Right' => position.top_right
+        'Middle Left' => position.middle_left
+        'Middle Center' => position.middle_center
+        'Middle Right' => position.middle_right
+        'Bottom Left' => position.bottom_left
+        'Bottom Center' => position.bottom_center
+        'Bottom Right' => position.bottom_right
+        => position.top_right
+
+method HTFEnabled(Helper helper) =>
+    helper.name := "HTFEnabled"
+    int enabled = 0
+    enabled += htf1.settings.show ? 1 : 0
+    enabled += htf2.settings.show ? 1 : 0
+    enabled += htf3.settings.show ? 1 : 0
+    int last = math.min(enabled, settings.max_sets)
+    last
+
+method CandleSetHigh(Helper helper, Candle[] candles, float h) =>
+    helper.name := "CandlesSetHigh"
+    float _h = h
+    if array.size(candles) > 0
+        for i = 0 to array.size(candles)-1
+            Candle c = array.get(candles, i)
+            if c.h > _h
+                _h := c.h
+    _h
+
+method CandlesHigh(Helper helper, Candle[] candles) =>
+    helper.name := "CandlesHigh"
+    h   = 0.0
+    int cnt = 0
+    int last = helper.HTFEnabled()
+
+    if htf1.settings.show and helper.ValidTimeframe(htf1.settings.htf)
+        h := helper.CandleSetHigh(htf1.candles, h)
+        cnt += 1
+    if htf2.settings.show and helper.ValidTimeframe(htf2.settings.htf) and cnt < last
+        h := helper.CandleSetHigh(htf2.candles, h)
+        cnt +=1
+    if htf3.settings.show and helper.ValidTimeframe(htf3.settings.htf) and cnt < last
+        h := helper.CandleSetHigh(htf3.candles, h)
+    h
+
+    if array.size(candles) > 0
+        for i = 0 to array.size(candles)-1
+            Candle c = array.get(candles, i)
+            if c.h > h
+                h := c.h
+    h
+
+method Reorder(CandleSet candleSet, int offset) =>
+    size = candleSet.candles.size()
+    if size > 0
+        for i = size-1 to 0
+            Candle candle = candleSet.candles.get(i)
+            t_buffer = offset + ((settings.width+settings.buffer)*(size-i-1))
+            box.set_left(candle.body, bar_index + t_buffer)
+            box.set_right(candle.body, bar_index + settings.width + t_buffer)
+            line.set_x1(candle.wick_up, bar_index+((settings.width)/2) + t_buffer)
+            line.set_x2(candle.wick_up, bar_index+((settings.width)/2) + t_buffer)
+            line.set_x1(candle.wick_down, bar_index+((settings.width)/2) + t_buffer)
+            line.set_x2(candle.wick_down, bar_index+((settings.width)/2) + t_buffer)
+    candleSet
+
+    top     = helper.CandleSetHigh(candleSet.candles, 0.0) - candleSet.y_shift
+    left    = bar_index + offset + ((settings.width+settings.buffer)*(size-1))/2
+
+    if settings.htf_label_show
+        var label l = candleSet.tfName
+        string lbl = helper.HTFName(candleSet.settings.htf)
+        if settings.htf_timer_show
+            lbl += "\n"
+        if not na(l)
+            label.set_xy(l, left, top)
+        else
+            l := label.new(left, top, lbl, color=color_transparent, textcolor = settings.htf_label_color, style=label.style_label_down, size = settings.htf_label_size, text_font_family=font.family_monospace)
+
+    if settings.htf_timer_show
+        string tmr = "(" + helper.RemainingTime(candleSet.settings.htf) + ")"
+        if not na(candleSet.tfTimer)
+            candleSet.tfTimer.set_xy(left, top)
+            candleSet.tfTimer.set_text(tmr)
+        else
+            candleSet.tfTimer := label.new(left, top, tmr, color=color_transparent, textcolor = settings.htf_timer_color, style=label.style_label_down, size = settings.htf_timer_size, text_font_family=font.family_monospace)
+
+    if candleSet.htf_starts.size() > 0
+        for i = 0 to candleSet.htf_starts.size() - 1
+            line l = candleSet.htf_starts.get(i)
+            if not na(l)
+                t_buffer = offset + ((settings.width+settings.buffer)*(i))
+                line.set_x1(l, bar_index + t_buffer)
+                line.set_x2(l, bar_index + t_buffer)
+    candleSet
+
+method calculateLogMidpoint(float high, float low, float open, float close) =>
+    float log_high = math.log(high)
+    float log_low = math.log(low)
+    float log_open = math.log(open)
+    float log_close = math.log(close)
+
+    float body_size = math.abs(log_close - log_open)
+    float upper_wick = log_high - math.max(log_open, log_close)
+    float lower_wick = math.min(log_open, log_close) - log_low
+
+    float log_mid_level = if math.max(upper_wick, lower_wick) > body_size
+        if upper_wick > lower_wick
+            log_high - upper_wick/2
+        else
+            log_low + lower_wick/2
+    else
+        (log_high + log_low)/2
+
+    math.exp(log_mid_level)
+
+method FindImbalance(CandleSet candleSet, bool isPrimary, bool drawSweep) =>
+    if barstate.isrealtime or barstate.islast
+        while candleSet.imbalances.size() > 0
+            Imbalance del = candleSet.imbalances.pop()
+            box.delete(del.b)
+
+        if candleSet.candles.size() > 3 and settings.fvg_show
+            if isPrimary
+                for i = 0 to candleSet.candles.size() - 2
+                    current_candle = candleSet.candles.get(i)
+                    prev_candle = candleSet.candles.get(i + 1)
+                    float mid_level = calculateLogMidpoint(prev_candle.h, prev_candle.l, prev_candle.o, prev_candle.c)
+                    midpoint_line = line.new(box.get_left(prev_candle.body) + settings.width/2, mid_level,box.get_left(current_candle.body) + settings.width/2, mid_level,color=TEMPLATE_COLOR, width=1, style=line.style_dotted)
+                    midpoint_lines.unshift(midpoint_line)
+
+            if drawSweep
+                for i = 0 to candleSet.candles.size() - 2
+                    current_candle = candleSet.candles.get(i)
+                    next_candle = candleSet.candles.get(i + 1)
+                    if current_candle.h > next_candle.h and current_candle.c < next_candle.h
+                        sweep_line = line.new(box.get_left(next_candle.body) + settings.width/2, next_candle.h, box.get_right(current_candle.body) + settings.width, next_candle.h, color=TEMPLATE_COLOR, width=1)
+                        sweep_lines.unshift(sweep_line)
+                    if current_candle.l < next_candle.l and current_candle.c > next_candle.l
+                        sweep_line = line.new(box.get_left(next_candle.body) + settings.width/2, next_candle.l, box.get_right(current_candle.body) + settings.width, next_candle.l, color=TEMPLATE_COLOR, width=1)
+                        sweep_lines.unshift(sweep_line)
+
+        if candleSet.candles.size() > 3 and settings.fvg_show
+            for i = 0 to candleSet.candles.size() -3
+                candle1 = candleSet.candles.get(i)
+                candle2 = candleSet.candles.get(i+2)
+                candle3 = candleSet.candles.get(i+1)
+                if (candle1.l > candle2.h and math.min(candle1.o, candle1.c) > math.max(candle2.o, candle2.c))
+                    Imbalance imb = Imbalance.new()
+                    imb.b := box.new(box.get_left(candle2.body), candle2.h, box.get_right(candle1.body), candle1.l, bgcolor=settings.fvg_color, border_color = color_transparent, xloc=xloc.bar_index)
+                    candleSet.imbalances.push(imb)
+                if (candle1.h < candle2.l and math.max(candle1.o, candle1.c) < math.min(candle2.o, candle2.c))
+                    Imbalance imb = Imbalance.new()
+                    imb.b := box.new(box.get_right(candle1.body), candle1.h, box.get_left(candle2.body), candle2.l, bgcolor=settings.fvg_color, border_color = color_transparent)
+                    candleSet.imbalances.push(imb)
+                box temp = box.copy(candle3.body)
+                box.delete(candle3.body)
+                candle3.body := temp
+
+        if candleSet.candles.size() > 2 and settings.vi_show
+            for i = 0 to candleSet.candles.size() -2
+                candle1 = candleSet.candles.get(i)
+                candle2 = candleSet.candles.get(i+1)
+                if (candle1.l < candle2.h and math.min(candle1.o, candle1.c) > math.max(candle2.o, candle2.c))
+                    Imbalance imb = Imbalance.new()
+                    imb.b := box.new(box.get_left(candle2.body), math.min(candle1.o, candle1.c), box.get_right(candle1.body), math.max(candle2.o, candle2.c), bgcolor=settings.vi_color, border_color = color_transparent)
+                    candleSet.imbalances.push(imb)
+                if (candle1.h > candle2.l and math.max(candle1.o, candle1.c) < math.min(candle2.o, candle2.c))
+                    Imbalance imb = Imbalance.new()
+                    imb.b := box.new(box.get_right(candle1.body), math.min(candle2.o, candle2.c), box.get_left(candle2.body), math.max(candle1.o, candle1.c), bgcolor=settings.vi_color, border_color = color_transparent)
+                    candleSet.imbalances.push(imb)
+    candleSet
+
+barHour = hour(time)
+
+candleOfDay = math.floor(barHour / 4) + 1
+
+label_atr = ta.atr(200) / 2
+
+method Monitor(CandleSet candleSet, bool drawLines) =>
+    HTFBarTime = time(candleSet.settings.htf)
+    isNewHTFCandle = use_actual_day_change and candleSet.settings.htf == "1D" ? dayofmonth(time) != dayofmonth(time[1]) : ta.change(HTFBarTime) != 0
+
+    if isNewHTFCandle
+        if drawLines and settings.htf_line_show
+            float visual_offset = label_atr * htf_line_extension
+            htf_lines.unshift(line.new(bar_index, high + visual_offset, bar_index, low - visual_offset, color=settings.htf_line_color, style=settings.htf_line_style, width=settings.htf_line_width, extend=extend.none))
+
+            float htf_sec = timeframe.in_seconds(candleSet.settings.htf)
+            string timeStr = ""
+
+            if htf_sec >= 2419200
+                string m_name = switch month(time)
+                    1 => "Jan"
+                    2 => "Feb"
+                    3 => "Mar"
+                    4 => "Apr"
+                    5 => "May"
+                    6 => "Jun"
+                    7 => "Jul"
+                    8 => "Aug"
+                    9 => "Sep"
+                    10 => "Oct"
+                    11 => "Nov"
+                    12 => "Dec"
+                    => ""
+                timeStr := m_name
+            else if htf_sec >= 604800
+                string m_name = switch month(time)
+                    1 => "Jan"
+                    2 => "Feb"
+                    3 => "Mar"
+                    4 => "Apr"
+                    5 => "May"
+                    6 => "Jun"
+                    7 => "Jul"
+                    8 => "Aug"
+                    9 => "Sep"
+                    10 => "Oct"
+                    11 => "Nov"
+                    12 => "Dec"
+                    => ""
+                timeStr := str.tostring(dayofmonth(time)) + " " + m_name
+            else if htf_sec >= 86400
+                string d_name = switch dayofweek(time)
+                    1 => "Sun"
+                    2 => "Mon"
+                    3 => "Tue"
+                    4 => "Wed"
+                    5 => "Thu"
+                    6 => "Fri"
+                    7 => "Sat"
+                    => ""
+                timeStr := d_name
+            else
+                timeStr := str.tostring(hour(time), "00") + ":" + str.tostring(minute(time), "00")
+
+            htf_labels.unshift(label.new(bar_index, high + visual_offset, text=timeStr, color=color.new(color.white, 100), textcolor=settings.htf_line_color, style=label.style_label_down, size=size.tiny))
+
+        if htf_lines.size() > candleSet.settings.max_display
+            line.delete(htf_lines.pop())
+        if htf_labels.size() > candleSet.settings.max_display
+            label.delete(htf_labels.pop())
+        if htf_labels_bottom.size() > candleSet.settings.max_display
+            label.delete(htf_labels_bottom.pop())
+
+        Candle candle = Candle.new()
+        candle.o := open, candle.c := close, candle.h := high, candle.l := low
+        candle.o_idx := bar_index, candle.c_idx := bar_index, candle.h_idx := bar_index, candle.l_idx := bar_index
+        bull = candle.c > candle.o
+        candle.body := box.new(bar_index, math.max(candle.o, candle.c) - candleSet.y_shift, bar_index+2, math.min(candle.o, candle.c) - candleSet.y_shift,
+             bull ? settings.bull_border : settings.bear_border, 1, bgcolor = bull ? settings.bull_body : settings.bear_body)
+        candle.wick_up := line.new(bar_index+1, candle.h - candleSet.y_shift, bar_index, math.max(candle.o, candle.c) - candleSet.y_shift,
+             color=bull ? settings.bull_wick : settings.bear_wick)
+        candle.wick_down := line.new(bar_index+1, math.min(candle.o, candle.c) - candleSet.y_shift, bar_index, candle.l - candleSet.y_shift,
+             color=bull ? settings.bull_wick : settings.bear_wick)
+        candleSet.candles.unshift(candle)
+
+        if candleSet.candles.size() > candleSet.settings.max_display
+            Candle del = array.pop(candleSet.candles)
+            box.delete(del.body), line.delete(del.wick_up), line.delete(del.wick_down)
+
+    htf_bars = int(timeframe.in_seconds(candleSet.settings.htf) / timeframe.in_seconds())
+
+    if drawLines and candleSet.candles.size() >= 4 and show_tspot
+        current_candle = candleSet.candles.get(0)
+        last_closed = candleSet.candles.get(1)
+        prev_closed = candleSet.candles.get(2)
+        prev_prev_closed = candleSet.candles.get(3)
+
+        latest_line = array.get(htf_lines, 0)
+        start_bar = line.get_x2(latest_line)
+
+        oktspot_bearish_bias = resolved_bias == "Bearish" or resolved_bias == "Neutral"
+        oktspot_bullish_bias = resolved_bias == "Bullish" or resolved_bias == "Neutral"
+
+        if not na(start_bar)
+            end_bar = int(start_bar + htf_bars)
+            float mid_level = calculateLogMidpoint(prev_closed.h, prev_closed.l, prev_closed.o, prev_closed.c)
+            var bool tspot_created = false
+            var int last_htf_candle_bar = 0
+
+            if start_bar != last_htf_candle_bar
+                tspot_created := false
+                last_htf_candle_bar := start_bar
+
+                if not tspot_created and last_closed.h > prev_closed.h and last_closed.c < prev_closed.h and oktspot_bearish_bias and not (last_closed.h > prev_closed.h and last_closed.l < prev_closed.l and last_closed.c > prev_closed.l and last_closed.c < prev_closed.h)
+                    if ui_fl_en
+                        exact_start_bar = find_exact_low_bar(prev_closed.l, htf_bars * 5)
+                        if not na(exact_start_bar)
+                            add_liquidity_line(exact_start_bar, prev_closed.l, false, ui_fl_col, ui_fl_sty, ui_fl_wid, ui_fl_max)
+
+                    if ui_c1_sweep_en
+                        string c1_style = ui_c1_sweep_sty == "Dashed" ? line.style_dashed : ui_c1_sweep_sty == "Dotted" ? line.style_dotted : line.style_solid
+                        int real_start_bar = prev_closed.h_idx
+                        int real_end_bar = last_closed.h_idx
+                        if real_start_bar > 0 and real_end_bar > 0
+                            line real_sweep = line.new(real_start_bar, prev_closed.h, real_end_bar, prev_closed.h, color=ui_c1_sweep_col, width=ui_c1_sweep_wid, style=c1_style)
+                            array.unshift(chart_sweep_lines, real_sweep)
+                            if array.size(chart_sweep_lines) > 3
+                                line.delete(array.pop(chart_sweep_lines))
+
+                    sweep_mid = calculateLogMidpoint(last_closed.h, last_closed.l, last_closed.o, last_closed.c)
+                    if last_closed.c < sweep_mid
+                        box newBox = box.new(start_bar, sweep_mid, end_bar, last_closed.c,
+                             bgcolor=tspot_bear_box_color,
+                             border_color=color.new(color.white, 100))
+                        line newMidline = line.new(start_bar, sweep_mid, end_bar, sweep_mid,
+                             color=settings.htf_label_color,
+                             style=tspot_line_style,
+                             width=settings.midline_width)
+                        line newCloseline = show_tspot_close_line ? line.new(start_bar, last_closed.c, end_bar, last_closed.c,
+                             color=settings.htf_label_color,
+                             style=tspot_line_style,
+                             width=settings.midline_width) : na
+
+                        if show_silver_tspot
+                            if (candleOfDay == 5 or (candleOfDay == 4 and hour(time, "America/New_York") >= 13)) and last_closed.c < prev_prev_closed.l and last_closed.c < prev_closed.l
+                                label.new(bar_index, high, "Silver T-Spot", color=color.new(color.white, 100), textcolor=settings.bear_body, style=label.style_label_down, size=tspot_sweep_label_size, text_font_family=font.family_monospace)
+
+                        tspot_boxes.unshift(newBox)
+                        tspot_midlines.unshift(newMidline)
+                        if not na(newCloseline)
+                            tspot_closelines.unshift(newCloseline)
+                        tspot_created := true
+
+                        c2_level = last_closed.h
+                        c2_bar = last_closed.h_idx
+
+                        if c2_bar > 0
+                            detectCISDAndProjections(c2_bar, last_closed.h, false, end_bar)
+
+                        if c2_bar > 0 and show_ttfm_labels
+                            c2_label = label.new(c2_bar, c2_level + label_atr, "C2", color=color.new(color.white, 100), textcolor=color.gray, style=label.style_label_down, size=ttfm_label_size, text_font_family=font.family_monospace)
+                            array.unshift(c2_labels, c2_label)
+                            c3_label = label.new(bar_index, sweep_mid + label_atr, "C3", color=color.new(color.white, 100), textcolor=color.gray, style=label.style_label_down, size=ttfm_label_size, text_font_family=font.family_monospace)
+                            array.unshift(c3_labels, c3_label)
+                            array.unshift(ttfm_events, TTFMEvent.new(is_bullish=false, invalid_level=c2_level, created_bar=bar_index, formation_bars=htf_bars, failed=false, consolidating=false, c2_lbl=c2_label, c3_lbl=c3_label, tspot_bx=newBox, tspot_ml=newMidline))
+
+                        if tspot_boxes.size() > history_max
+                            box.delete(tspot_boxes.pop())
+                            line.delete(tspot_midlines.pop())
+                            if tspot_closelines.size() > 0
+                                line.delete(tspot_closelines.pop())
+
+                if not tspot_created and last_closed.l < prev_closed.l and last_closed.c > prev_closed.l and oktspot_bullish_bias and not (last_closed.h > prev_closed.h and last_closed.l < prev_closed.l and last_closed.c > prev_closed.l and last_closed.c < prev_closed.h)
+                    if ui_fl_en
+                        exact_start_bar = find_exact_high_bar(prev_closed.h, htf_bars * 5)
+                        if not na(exact_start_bar)
+                            add_liquidity_line(exact_start_bar, prev_closed.h, true, ui_fl_col, ui_fl_sty, ui_fl_wid, ui_fl_max)
+
+                    if ui_c1_sweep_en
+                        string c1_style = ui_c1_sweep_sty == "Dashed" ? line.style_dashed : ui_c1_sweep_sty == "Dotted" ? line.style_dotted : line.style_solid
+                        int real_start_bar = prev_closed.l_idx
+                        int real_end_bar = last_closed.l_idx
+                        if real_start_bar > 0 and real_end_bar > 0
+                            line real_sweep = line.new(real_start_bar, prev_closed.l, real_end_bar, prev_closed.l, color=ui_c1_sweep_col, width=ui_c1_sweep_wid, style=c1_style)
+                            array.unshift(chart_sweep_lines, real_sweep)
+                            if array.size(chart_sweep_lines) > 3
+                                line.delete(array.pop(chart_sweep_lines))
+
+                    sweep_mid = calculateLogMidpoint(last_closed.h, last_closed.l, last_closed.o, last_closed.c)
+                    if last_closed.c > sweep_mid
+                        box newBox = box.new(start_bar, sweep_mid, end_bar, last_closed.c,
+                             bgcolor=color.new(settings.bull_body, tspot_transparency),
+                             border_color=color.new(color.white, 100))
+                        line newMidline = line.new(start_bar, sweep_mid, end_bar, sweep_mid,
+                             color=settings.htf_label_color,
+                             style=tspot_line_style,
+                             width=settings.midline_width)
+                        line newCloseline = show_tspot_close_line ? line.new(start_bar, last_closed.c, end_bar, last_closed.c,
+                             color=settings.htf_label_color,
+                             style=tspot_line_style,
+                             width=settings.midline_width) : na
+
+                        if show_silver_tspot
+                            if (candleOfDay == 5 or (candleOfDay == 4 and hour(time, "America/New_York") >= 13)) and last_closed.c > prev_prev_closed.h and last_closed.c > prev_closed.h
+                                label.new(bar_index, low, "Silver T-Spot", color=color.new(color.white, 100), textcolor=settings.bear_body, style=label.style_label_up, size=tspot_sweep_label_size, text_font_family=font.family_monospace)
+
+                        tspot_boxes.unshift(newBox)
+                        tspot_midlines.unshift(newMidline)
+                        if not na(newCloseline)
+                            tspot_closelines.unshift(newCloseline)
+                        tspot_created := true
+
+                        c2_level = last_closed.l
+                        c2_bar = last_closed.l_idx
+
+                        if c2_bar > 0
+                            detectCISDAndProjections(c2_bar, last_closed.l, true, end_bar)
+
+                        if c2_bar > 0 and show_ttfm_labels
+                            c2_label = label.new(c2_bar, c2_level - label_atr, "C2", color=color.new(color.white, 100), textcolor=color.gray, style=label.style_label_down, size=ttfm_label_size, text_font_family=font.family_monospace)
+                            array.unshift(c2_labels, c2_label)
+                            c3_label = label.new(bar_index, sweep_mid - label_atr, "C3", color=color.new(color.white, 100), textcolor=color.gray, style=label.style_label_down, size=ttfm_label_size, text_font_family=font.family_monospace)
+                            array.unshift(c3_labels, c3_label)
+                            array.unshift(ttfm_events, TTFMEvent.new(is_bullish=true, invalid_level=c2_level, created_bar=bar_index, formation_bars=htf_bars, failed=false, consolidating=false, c2_lbl=c2_label, c3_lbl=c3_label, tspot_bx=newBox, tspot_ml=newMidline))
+
+                        if tspot_boxes.size() > history_max
+                            box.delete(tspot_boxes.pop())
+                            line.delete(tspot_midlines.pop())
+                            if tspot_closelines.size() > 0
+                                line.delete(tspot_closelines.pop())
+
+                if not tspot_created and prev_closed.h > prev_prev_closed.h and last_closed.c < math.max(prev_closed.o, prev_closed.c) and oktspot_bearish_bias and not (last_closed.h > prev_closed.h and last_closed.l < prev_closed.l and last_closed.c > prev_closed.l and last_closed.c < prev_closed.h) and ((prev_closed.c >= calculateLogMidpoint(prev_closed.h, prev_closed.l, prev_closed.o, prev_closed.c)) or (prev_closed.c >= prev_prev_closed.h) or (prev_closed.h > prev_prev_closed.h and prev_closed.l < prev_prev_closed.l and prev_closed.c > prev_prev_closed.l and prev_closed.c < prev_prev_closed.h))
+                    sweep_mid = calculateLogMidpoint(last_closed.h, last_closed.l, last_closed.o, last_closed.c)
+                    if last_closed.c < sweep_mid
+                        box newBox = box.new(start_bar, sweep_mid, end_bar, last_closed.c, bgcolor=color.new(settings.bear_body, tspot_transparency), border_color=color.new(color.white, 100))
+                        if ui_fl_en
+                            exact_start_bar = find_exact_low_bar(prev_closed.l, htf_bars * 5)
+                            if not na(exact_start_bar)
+                                add_liquidity_line(exact_start_bar, prev_closed.l, false, ui_fl_col, ui_fl_sty, ui_fl_wid, ui_fl_max)
+                        line newMidline = line.new(start_bar, sweep_mid, end_bar, sweep_mid, color=settings.htf_label_color, style=tspot_line_style, width=settings.midline_width)
+                        line newCloseline = show_tspot_close_line ? line.new(start_bar, last_closed.c, end_bar, last_closed.c, color=settings.htf_label_color,
+                             style=tspot_line_style,
+                             width=settings.midline_width) : na
+
+                        if show_silver_tspot
+                            if (candleOfDay == 5 or (candleOfDay == 4 and hour(time, "America/New_York") >= 13)) and last_closed.c < prev_prev_closed.l and last_closed.c < prev_closed.l
+                                label.new(bar_index, high, "Silver Expansive T-Spot", color=color.new(color.white, 100), textcolor=settings.bear_body, style=label.style_label_down, size=tspot_sweep_label_size, text_font_family=font.family_monospace)
+
+                        tspot_boxes.unshift(newBox)
+                        tspot_midlines.unshift(newMidline)
+                        if not na(newCloseline)
+                            tspot_closelines.unshift(newCloseline)
+                        tspot_created := true
+
+                        c2_level = prev_closed.h
+                        c2_bar = prev_closed.h_idx
+
+                        if c2_bar > 0
+                            detectCISDAndProjections(c2_bar, prev_closed.h, false, end_bar)
+
+                        if c2_bar > 0 and show_ttfm_labels
+                            c2_label = label.new(c2_bar, c2_level + label_atr, "C2", color=color.new(color.white, 100), textcolor=color.gray, style=label.style_label_down, size=ttfm_label_size, text_font_family=font.family_monospace)
+                            array.unshift(c2_labels, c2_label)
+                            c4_label = label.new(bar_index, sweep_mid + label_atr, "C4", color=color.new(color.white, 100), textcolor=color.gray, style=label.style_label_down, size=ttfm_label_size, text_font_family=font.family_monospace)
+                            array.unshift(c3_labels, c4_label)
+                            array.unshift(ttfm_events, TTFMEvent.new(is_bullish=false, invalid_level=c2_level, created_bar=bar_index, formation_bars=htf_bars, failed=false, consolidating=false, c2_lbl=c2_label, c3_lbl=c4_label, tspot_bx=newBox, tspot_ml=newMidline))
+
+                        if tspot_boxes.size() > history_max
+                            box.delete(tspot_boxes.pop())
+                            line.delete(tspot_midlines.pop())
+                            if tspot_closelines.size() > 0
+                                line.delete(tspot_closelines.pop())
+
+                if not tspot_created and prev_closed.l < prev_prev_closed.l and last_closed.c > math.min(prev_closed.o, prev_closed.c) and oktspot_bullish_bias and not (last_closed.h > prev_closed.h and last_closed.l < prev_closed.l and last_closed.c > prev_closed.l and last_closed.c < prev_closed.h) and ((prev_closed.c <= calculateLogMidpoint(prev_closed.h, prev_closed.l, prev_closed.o, prev_closed.c)) or (prev_closed.c <= prev_prev_closed.l) or (prev_closed.h > prev_prev_closed.h and prev_closed.l < prev_prev_closed.l and prev_closed.c > prev_prev_closed.l and prev_closed.c < prev_prev_closed.h))
+                    sweep_mid = calculateLogMidpoint(last_closed.h, last_closed.l, last_closed.o, last_closed.c)
+
+                    if last_closed.c > sweep_mid
+                        box newBox = box.new(start_bar, sweep_mid, end_bar, last_closed.c, bgcolor=color.new(settings.bull_body, tspot_transparency), border_color=color.new(color.white, 100))
+                        if ui_fl_en
+                            exact_start_bar = find_exact_high_bar(prev_closed.h, htf_bars * 5)
+                            if not na(exact_start_bar)
+                                add_liquidity_line(exact_start_bar, prev_closed.h, true, ui_fl_col, ui_fl_sty, ui_fl_wid, ui_fl_max)
+                        line newMidline = line.new(start_bar, sweep_mid, end_bar, sweep_mid, color=settings.htf_label_color, style=tspot_line_style, width=settings.midline_width)
+                        line newCloseline = show_tspot_close_line ? line.new(start_bar, last_closed.c, end_bar, last_closed.c, color=settings.htf_label_color,
+                             style=tspot_line_style,
+                             width=settings.midline_width) : na
+
+                        if show_silver_tspot
+                            if (candleOfDay == 5 or (candleOfDay == 4 and hour(time, "America/New_York") >= 13)) and last_closed.c > prev_prev_closed.h and last_closed.c > prev_closed.h
+                                label.new(bar_index, low, "Silver Expansive T-Spot", color=color.new(color.white, 100), textcolor=settings.bull_body, style=label.style_label_up, size=tspot_sweep_label_size, text_font_family=font.family_monospace)
+
+                        tspot_boxes.unshift(newBox)
+                        tspot_midlines.unshift(newMidline)
+                        if not na(newCloseline)
+                            tspot_closelines.unshift(newCloseline)
+                        tspot_created := true
+
+                        c2_level = prev_closed.l
+                        c2_bar = prev_closed.l_idx
+
+                        if c2_bar > 0
+                            detectCISDAndProjections(c2_bar, prev_closed.l, true, end_bar)
+
+                        if c2_bar > 0 and show_ttfm_labels
+                            c2_label = label.new(c2_bar, c2_level - label_atr, "C2", color=color.new(color.white, 100), textcolor=color.gray, style=label.style_label_down, size=ttfm_label_size, text_font_family=font.family_monospace)
+                            array.unshift(c2_labels, c2_label)
+                            c4_label = label.new(bar_index, sweep_mid - label_atr, "C4", color=color.new(color.white, 100), textcolor=color.gray, style=label.style_label_down, size=ttfm_label_size, text_font_family=font.family_monospace)
+                            array.unshift(c3_labels, c4_label)
+                            array.unshift(ttfm_events, TTFMEvent.new(is_bullish=true, invalid_level=c2_level, created_bar=bar_index, formation_bars=htf_bars, failed=false, consolidating=false, c2_lbl=c2_label, c3_lbl=c4_label, tspot_bx=newBox, tspot_ml=newMidline))
+
+                        if tspot_boxes.size() > history_max
+                            box.delete(tspot_boxes.pop())
+                            line.delete(tspot_midlines.pop())
+                            if tspot_closelines.size() > 0
+                                line.delete(tspot_closelines.pop())
+
+                if not tspot_created and last_closed.l < mid_level and last_closed.l > prev_closed.o and last_closed.c > prev_closed.h and oktspot_bullish_bias and not (last_closed.h > prev_closed.h and last_closed.l < prev_closed.l and last_closed.c > prev_closed.l and last_closed.c < prev_closed.h)
+                    sweep_mid = calculateLogMidpoint(last_closed.h, last_closed.l, last_closed.o, last_closed.c)
+                    if last_closed.c > sweep_mid
+                        box newBox = box.new(start_bar, sweep_mid, end_bar, last_closed.c,
+                             bgcolor=color.new(settings.bull_body, tspot_transparency),
+                             border_color=color.new(color.white, 100))
+                        line newMidline = line.new(start_bar, sweep_mid, end_bar, sweep_mid,
+                             color=settings.htf_label_color,
+                             style=tspot_line_style,
+                             width=settings.midline_width)
+                        line newCloseline = show_tspot_close_line ? line.new(start_bar, last_closed.c, end_bar, last_closed.c,
+                             color=settings.htf_label_color,
+                             style=tspot_line_style,
+                             width=settings.midline_width) : na
+
+                        if show_silver_tspot
+                            if (candleOfDay == 5 or (candleOfDay == 4 and hour(time, "America/New_York") >= 13)) and last_closed.c > prev_prev_closed.h and last_closed.c > prev_closed.h
+                                label.new(bar_index, low, "Silver T-Spot", color=color.new(color.white, 100), textcolor=settings.bull_body, style=label.style_label_up, size=tspot_sweep_label_size, text_font_family=font.family_monospace)
+
+                        tspot_boxes.unshift(newBox)
+                        tspot_midlines.unshift(newMidline)
+                        if not na(newCloseline)
+                            tspot_closelines.unshift(newCloseline)
+                        tspot_created := true
+
+                        if tspot_boxes.size() > history_max
+                            box.delete(tspot_boxes.pop())
+                            line.delete(tspot_midlines.pop())
+                            if tspot_closelines.size() > 0
+                                line.delete(tspot_closelines.pop())
+
+                if not tspot_created and last_closed.h > mid_level and last_closed.h < prev_closed.o and last_closed.c < prev_closed.l and oktspot_bearish_bias and not (last_closed.h > prev_closed.h and last_closed.l < prev_closed.l and last_closed.c > prev_closed.l and last_closed.c < prev_closed.h)
+                    sweep_mid = calculateLogMidpoint(last_closed.h, last_closed.l, last_closed.o, last_closed.c)
+                    if last_closed.c < sweep_mid
+                        box newBox = box.new(start_bar, sweep_mid, end_bar, last_closed.c,
+                             bgcolor=tspot_bull_box_color,
+                             border_color=color.new(color.white, 100))
+                        line newMidline = line.new(start_bar, sweep_mid, end_bar, sweep_mid,
+                             color=settings.htf_label_color,
+                             style=tspot_line_style,
+                             width=settings.midline_width)
+                        line newCloseline = show_tspot_close_line ? line.new(start_bar, last_closed.c, end_bar, last_closed.c,
+                             color=settings.htf_label_color,
+                             style=tspot_line_style,
+                             width=settings.midline_width) : na
+
+                        if show_silver_tspot
+                            if (candleOfDay == 5 or (candleOfDay == 4 and hour(time, "America/New_York") >= 13)) and last_closed.c < prev_prev_closed.l and last_closed.c < prev_closed.l
+                                label.new(bar_index, high, "Silver T-Spot", color=color.new(color.white, 100), textcolor=settings.bear_body, style=label.style_label_down, size=tspot_sweep_label_size, text_font_family=font.family_monospace)
+
+                        tspot_boxes.unshift(newBox)
+                        tspot_midlines.unshift(newMidline)
+                        if not na(newCloseline)
+                            tspot_closelines.unshift(newCloseline)
+                        tspot_created := true
+
+                        if tspot_boxes.size() > history_max
+                            box.delete(tspot_boxes.pop())
+                            line.delete(tspot_midlines.pop())
+                            if tspot_closelines.size() > 0
+                                line.delete(tspot_closelines.pop())
+
+                if tspot_created
+                    while tspot_boxes.size() > history_max
+                        box.delete(tspot_boxes.pop())
+                    while tspot_midlines.size() > history_max
+                        line.delete(tspot_midlines.pop())
+                    while tspot_closelines.size() > history_max
+                        line.delete(tspot_closelines.pop())
+
+                while c2_labels.size() > history_max
+                    label.delete(c2_labels.pop())
+                    label.delete(c3_labels.pop())
+                    if ttfm_events.size() > 0
+                        ttfm_events.pop()
+
+    candleSet
+
+method Update(CandleSet candleSet, int offset, bool showTrace) =>
+    if candleSet.candles.size() > 0
+        Candle candle   = candleSet.candles.first()
+        candle.h_idx    := high > candle.h ? bar_index : candle.h_idx
+        candle.h        := high > candle.h ? high : candle.h
+        candle.l_idx    := low < candle.l ? bar_index : candle.l_idx
+        candle.l        := low < candle.l ? low : candle.l
+        candle.c        := close
+        candle.c_idx   := bar_index
+
+        bull = candle.c > candle.o
+
+        box.set_top(candle.body, candle.o - candleSet.y_shift)
+        box.set_bottom(candle.body, candle.c - candleSet.y_shift)
+        box.set_bgcolor(candle.body, bull ? settings.bull_body : settings.bear_body)
+        box.set_border_color(candle.body, bull ? settings.bull_border : settings.bear_border)
+        line.set_color(candle.wick_up, bull ? settings.bull_wick : settings.bear_wick)
+        line.set_color(candle.wick_down, bull ? settings.bull_wick : settings.bear_wick)
+        line.set_y1(candle.wick_up, candle.h - candleSet.y_shift)
+        line.set_y2(candle.wick_up, math.max(candle.o, candle.c) - candleSet.y_shift)
+        line.set_y1(candle.wick_down, candle.l - candleSet.y_shift)
+        line.set_y2(candle.wick_down, math.min(candle.o, candle.c) - candleSet.y_shift)
+
+        if barstate.isrealtime or barstate.islast
+            candleSet.Reorder(offset)
+    candleSet
+
+resolved_bias := ui_bias
+if ui_bias == "Auto Bias 1" and htf1.candles.size() >= 3
+    resolved_bias := helper.GetHTFBias(htf1.candles.get(1), htf1.candles.get(2)) == "Bias: Bullish" ? "Bullish" : (helper.GetHTFBias(htf1.candles.get(1), htf1.candles.get(2)) == "Bias: Bearish" ? "Bearish" : "Neutral")
+else if ui_bias == "Auto Bias 2" and htf2.candles.size() >= 3
+    resolved_bias := helper.GetHTFBias(htf2.candles.get(1), htf2.candles.get(2)) == "Bias: Bullish" ? "Bullish" : (helper.GetHTFBias(htf2.candles.get(1), htf2.candles.get(2)) == "Bias: Bearish" ? "Bearish" : "Neutral")
+
+int cnt = 0
+int last = helper.HTFEnabled()
+
+pivot_high_open = ta.pivothigh(open, 2, 2)
+pivot_low_open = ta.pivotlow(open, 2, 2)
+pivot_high_close = ta.pivothigh(close, 2, 2)
+pivot_low_close = ta.pivotlow(close, 2, 2)
+pivot_high_high = ta.pivothigh(high, 2, 2)
+pivot_low_low = ta.pivotlow(low, 2, 2)
+
+pivot_high = usebody_for_confirmation ? not na(pivot_high_open) or not na(pivot_high_close) and not na(pivot_high_high) ? (not na(pivot_high_open) ? pivot_high_open : pivot_high_close) : na : pivot_high_high
+pivot_low = usebody_for_confirmation ? not na(pivot_low_open) or not na(pivot_low_close) and not na(pivot_low_low) ? (not na(pivot_low_open) ? pivot_low_open : pivot_low_close) : na : pivot_low_low
+
+if not na(pivot_high)
+    last_pivot_high := usebody_for_confirmation ? math.max(open[2], close[2]) : pivot_high
+    last_pivot_high_bar := bar_index[2]
+
+if not na(pivot_low)
+    last_pivot_low := usebody_for_confirmation ? math.min(open[2], close[2]) : pivot_low
+    last_pivot_low_bar := bar_index[2]
+
+tspot_start_bar = 0
+if tspot_boxes.size() > 0
+    latest_tspot = tspot_boxes.get(0)
+    latest_midline = tspot_midlines.get(0)
+    tspot_top = box.get_top(latest_tspot)
+    tspot_bottom = box.get_bottom(latest_tspot)
+    tspot_start_bar := box.get_left(latest_tspot)
+
+    if tspot_start_bar != last_tspot_start_bar
+        tspot_touched := false
+
+    last_tspot_start_bar := tspot_start_bar
+
+    tspot_midline = line.get_y1(latest_midline)
+
+    tspot_type := tspot_midline >= math.max(tspot_top, tspot_bottom) ? "bearish" : "bullish"
+
+    tspot_touch_level = tspot_type == "bearish" ? math.min(tspot_top, tspot_bottom) : math.max(tspot_top, tspot_bottom)
+
+    if tspot_type == "bearish"
+        if (high > tspot_touch_level or open > tspot_touch_level) and close < tspot_touch_level
+            tspot_touched := true
+            tspot_level := tspot_touch_level
+            touch_bar := bar_index
+    else
+        if (low < tspot_touch_level or open < tspot_touch_level) and close > tspot_touch_level
+            tspot_touched := true
+            tspot_level := tspot_touch_level
+            touch_bar := bar_index
+
+if tspot_touched and show_tspot_sweeps
+    if tspot_type == "bullish" and not na(last_pivot_high) and last_pivot_high_bar < touch_bar and close > last_pivot_high and  open < last_pivot_high and last_pivot_high > tspot_level
+        lowest_low = low[0]
+        for i = 0 to (bar_index - last_pivot_high_bar)
+            if low[i] < lowest_low
+                lowest_low := low[i]
+
+        if show_confirmation_lines
+            if confirmation_lines.size() > 0
+                for i = 0 to confirmation_lines.size() - 1
+                    line.delete(confirmation_lines.get(i))
+                array.clear(confirmation_lines)
+
+            color dynamic_conf_color = ui_bull_cisd_col
+            int dynamic_conf_width = ui_bull_cisd_wid
+            string dynamic_conf_style = ui_bull_cisd_sty == "Dashed" ? line.style_dashed : ui_bull_cisd_sty == "Dotted" ? line.style_dotted : line.style_solid
+
+            new_confirmation_line = line.new(last_pivot_high_bar, last_pivot_high, bar_index, last_pivot_high, color=dynamic_conf_color, width=dynamic_conf_width, style=dynamic_conf_style)
+            array.push(confirmation_lines, new_confirmation_line)
+
+        tspot_touched := false
+
+    if tspot_type == "bearish" and not na(last_pivot_low) and last_pivot_low_bar < touch_bar and close < last_pivot_low and open > last_pivot_low and last_pivot_low < tspot_level
+        highest_high = high[0]
+        for i = 0 to (bar_index - last_pivot_low_bar)
+            if high[i] > highest_high
+                highest_high := high[i]
+
+        if show_confirmation_lines
+            if confirmation_lines.size() > 0
+                for i = 0 to confirmation_lines.size() - 1
+                    line.delete(confirmation_lines.get(i))
+                array.clear(confirmation_lines)
+
+            color dynamic_conf_color = ui_bear_cisd_col
+            int dynamic_conf_width = ui_bear_cisd_wid
+            string dynamic_conf_style = ui_bear_cisd_sty == "Dashed" ? line.style_dashed : ui_bear_cisd_sty == "Dotted" ? line.style_dotted : line.style_solid
+
+            new_confirmation_line = line.new(last_pivot_low_bar, last_pivot_low, bar_index, last_pivot_low, color=dynamic_conf_color, width=dynamic_conf_width, style=dynamic_conf_style)
+            array.push(confirmation_lines, new_confirmation_line)
+
+        tspot_touched := false
+
+if hide_against_tspots and tspot_boxes.size() > 0
+    for i = 0 to tspot_boxes.size() - 1
+        current_box = tspot_boxes.get(i)
+        current_midline = tspot_midlines.get(i)
+        current_closeline = i < tspot_closelines.size() ? tspot_closelines.get(i) : na
+        box_top = box.get_top(current_box)
+        box_bottom = box.get_bottom(current_box)
+        midline_price = line.get_y1(current_midline)
+
+        if box_top > box_bottom and close > midline_price
+            box.set_bgcolor(current_box, color.new(color.white, 100))
+            box.set_border_color(current_box, color.new(color.white, 100))
+            line.set_color(current_midline, color.new(settings.htf_label_color, 100))
+            if not na(current_closeline)
+                line.set_color(current_closeline, color.new(settings.htf_label_color, 100))
+
+        else if box_bottom > box_top and close < midline_price
+            box.set_bgcolor(current_box, color.new(color.white, 100))
+            box.set_border_color(current_box, color.new(color.white, 100))
+            line.set_color(current_midline, color.new(settings.htf_label_color, 100))
+            if not na(current_closeline)
+                line.set_color(current_closeline, color.new(settings.htf_label_color, 100))
+
+        else
+            if box_top > box_bottom
+                box.set_bgcolor(current_box, tspot_bear_box_color)
+                box.set_border_color(current_box, color.new(color.white, 100))
+                line.set_color(current_midline, settings.htf_label_color)
+                if not na(current_closeline)
+                    line.set_color(current_closeline, settings.htf_label_color)
+            else
+                box.set_bgcolor(current_box, tspot_bull_box_color)
+                box.set_border_color(current_box, color.new(color.white, 100))
+                line.set_color(current_midline, settings.htf_label_color)
+                if not na(current_closeline)
+                    line.set_color(current_closeline, settings.htf_label_color)
+
+if delete_against_tspots and tspot_boxes.size() > 1
+    bool[] bearish_traded_against = array.new<bool>(tspot_boxes.size(), false)
+    bool[] bullish_traded_against = array.new<bool>(tspot_boxes.size(), false)
+
+    for i = 0 to tspot_boxes.size() - 1
+        current_box = tspot_boxes.get(i)
+        current_midline = tspot_midlines.get(i)
+        box_top = box.get_top(current_box)
+        box_bottom = box.get_bottom(current_box)
+        midline_price = line.get_y1(current_midline)
+
+        if box_top > box_bottom
+            traded_against = false
+            for j = 0 to 100
+                if bar_index - j >= box.get_left(current_box)
+                    if close[j] > midline_price
+                        traded_against := true
+                        break
+            array.set(bearish_traded_against, i, traded_against)
+
+        else if box_bottom > box_top
+            traded_against = false
+            for j = 0 to 100
+                if bar_index - j >= box.get_left(current_box)
+                    if close[j] < midline_price
+                        traded_against := true
+                        break
+            array.set(bullish_traded_against, i, traded_against)
+
+    latest_bearish_index = -1
+    latest_bullish_index = -1
+
+    for i = 0 to tspot_boxes.size() - 1
+        current_box = tspot_boxes.get(i)
+        box_top = box.get_top(current_box)
+        box_bottom = box.get_bottom(current_box)
+
+        if box_top > box_bottom
+            if latest_bearish_index == -1 or box.get_left(tspot_boxes.get(latest_bearish_index)) < box.get_left(current_box)
+                latest_bearish_index := i
+        else if box_bottom > box_top
+            if latest_bullish_index == -1 or box.get_left(tspot_boxes.get(latest_bullish_index)) < box.get_left(current_box)
+                latest_bullish_index := i
+
+    for i = tspot_boxes.size() - 1 to 0
+        current_box = tspot_boxes.get(i)
+        box_top = box.get_top(current_box)
+        box_bottom = box.get_bottom(current_box)
+
+        should_delete = false
+
+        if box_top > box_bottom
+            if i != latest_bearish_index and array.get(bearish_traded_against, i)
+                should_delete := true
+        else if box_bottom > box_top
+            if i != latest_bullish_index and array.get(bullish_traded_against, i)
+                should_delete := true
+
+        if should_delete
+            box.delete(tspot_boxes.get(i))
+            line.delete(tspot_midlines.get(i))
+            if i < tspot_closelines.size()
+                line.delete(tspot_closelines.get(i))
+
+            array.remove(tspot_boxes, i)
+            array.remove(tspot_midlines, i)
+            if i < tspot_closelines.size()
+                array.remove(tspot_closelines, i)
+            array.remove(bearish_traded_against, i)
+            array.remove(bullish_traded_against, i)
+
+newPeriod_smt = timeframe.change(h1)
+
+if enableSMT and bar_index > last_bar_index - 4500 and h1 != ""
+    sPair = smtAutoMode ? getSMTPair() : str.tostring(smtManualPair)
+    if sPair != ""
+        [sH_htf, sL_htf, sH1_htf, sL1_htf] = request.security(sPair, h1, [high, low, high[1], low[1]], lookahead = barmerge.lookahead_off)
+        [sH_piv, sL_piv] = request.security(sPair, timeframe.period, [high[3], low[3]], lookahead = barmerge.lookahead_off)
+
+        chartPivDir = not na(ta.pivothigh(3, 3)) ? 1 : not na(ta.pivotlow(3, 3)) ? -1 : 0
+
+        [htfClose, htfOpen, htfHigh, htfLow, htfHigh1, htfLow1] = request.security(syminfo.tickerid, h1, [close, open, high, low, high[1], low[1]], lookahead = barmerge.lookahead_off)
+
+        bearD_htf = (not na(htfClose) and htfClose < htfOpen) and htfHigh < htfHigh1 and sH_htf > sH1_htf
+        bullD_htf = (not na(htfClose) and htfClose > htfOpen) and htfLow > htfLow1 and sL_htf < sL1_htf
+
+        if high >= currCH_smt or na(currCH_smt)
+            currCH_smt := high, currCHT_smt := time
+        if low <= currCL_smt or na(currCL_smt)
+            currCL_smt := low, currCLT_smt := time
+
+        if newPeriod_smt
+            if bearD_htf[1]
+                smtArray.push(SMT.new("BEARISH", sPair, prevCH_smt, currCH_smt, prevCHT_smt, currCHT_smt, na, na, na, na, true, bar_index, na, na))
+            if bullD_htf[1]
+                smtArray.push(SMT.new("BULLISH", sPair, na, na, na, na, prevCL_smt, currCL_smt, prevCLT_smt, currCLT_smt, true, bar_index, na, na))
+            prevCH_smt := currCH_smt, prevCHT_smt := currCHT_smt
+            prevCL_smt := currCL_smt, prevCLT_smt := currCLT_smt
+            currCH_smt := high, currCHT_smt := time
+            currCL_smt := low, currCLT_smt := time
+            line.delete(liveBearSmtL), liveBearSmtL := na
+            line.delete(liveBullSmtL), liveBullSmtL := na
+
+        if chartPivDir == 1
+            if not na(chartPivotHigh)
+                prevChartPivotHigh := chartPivotHigh
+                prevChartPivotHighTime := chartPivotHighTime
+            chartPivotHigh := high[3], chartPivotHighTime := time[3]
+
+            if not na(smtPivotHigh)
+                prevSmtPivotHigh := smtPivotHigh
+            smtPivotHigh := sH_piv
+
+            if not na(prevChartPivotHigh) and chartPivotHigh > prevChartPivotHigh and smtPivotHigh < prevSmtPivotHigh
+                smtArray.push(SMT.new("BEARISH", sPair, prevChartPivotHigh, chartPivotHigh, prevChartPivotHighTime, chartPivotHighTime, na, na, na, na, true, bar_index, na, na))
+
+        if chartPivDir == -1
+            if not na(chartPivotLow)
+                prevChartPivotLow := chartPivotLow
+                prevChartPivotLowTime := chartPivotLowTime
+            chartPivotLow := low[3], chartPivotLowTime := time[3]
+
+            if not na(smtPivotLow)
+                prevSmtPivotLow := smtPivotLow
+            smtPivotLow := sL_piv
+
+            if not na(prevChartPivotLow) and chartPivotLow < prevChartPivotLow and smtPivotLow > prevSmtPivotLow
+                smtArray.push(SMT.new("BULLISH", sPair, na, na, na, na, prevChartPivotLow, chartPivotLow, prevChartPivotLowTime, chartPivotLowTime, true, bar_index, na, na))
+
+int htf_offset = settings.offset
+
+if (barstate.isrealtime or barstate.islast) and ttfm_events.size() > 0
+    for i = 0 to ttfm_events.size() - 1
+        TTFMEvent ev = ttfm_events.get(i)
+        if not ev.failed
+            bool just_failed = ev.is_bullish ? close < ev.invalid_level : close > ev.invalid_level
+            if just_failed
+                ev.failed := true
+
+                box.delete(ev.tspot_bx)
+                line.delete(ev.tspot_ml)
+                if i == 0
+                    if array.size(projection_lines) > 0
+                        for ln in projection_lines
+                            line.delete(ln)
+                        array.clear(projection_lines)
+                    if array.size(projection_labels) > 0
+                        for lbl in projection_labels
+                            label.delete(lbl)
+                        array.clear(projection_labels)
+                    if array.size(protected_swing_labels) > 0
+                        label.delete(array.shift(protected_swing_labels))
+            else if (bar_index - ev.created_bar) >= math.max(ev.formation_bars, 1)
+                ev.consolidating := true
+        color state_color = ev.failed ? color.red : ev.consolidating ? color.orange : color.gray
+        if not na(ev.c2_lbl)
+            label.set_textcolor(ev.c2_lbl, state_color)
+        if not na(ev.c3_lbl)
+            label.set_textcolor(ev.c3_lbl, state_color)
+
+if array.size(active_liq_lines) > 0
+    for i = array.size(active_liq_lines) - 1 to 0
+        LiquidityLine ll = array.get(active_liq_lines, i)
+        if ll.active
+            line.set_x2(ll.ln, bar_index)
+            bool touched = false
+            if ll.is_bullish
+                if high >= ll.level and bar_index > ll.start_bar
+                    touched := true
+            else
+                if low <= ll.level and bar_index > ll.start_bar
+                    touched := true
+            if touched
+                ll.active := false
+                line.delete(ll.ln)
+                array.remove(active_liq_lines, i)
+
+if barstate.isrealtime or barstate.islast
+    while midpoint_lines.size() > 0
+        line.delete(midpoint_lines.pop())
+    while sweep_lines.size() > 0
+        line.delete(sweep_lines.pop())
+
+chart_range = ta.highest(high, 200) - ta.lowest(low, 200)
+shift_amount = chart_range * vertical_gap_mult
+
+htf1.y_shift := 0.0
+htf2.y_shift := layout_mode == "Vertical Stacked (Same Offset)" ? shift_amount : 0.0
+htf3.y_shift := layout_mode == "Vertical Stacked (Same Offset)" ? shift_amount * 2 : 0.0
+
+if htf1.settings.show and helper.ValidTimeframe(htf1.settings.htf) and bar_index > last_bar_index - 1000
+    bool showTrace = settings.trace_anchor == "First Timeframe"
+    htf1.Monitor(true).Update(htf_offset, showTrace).FindImbalance(true, ui_c1_sweep_en)
+
+    if htf_lines.size() > 0 and htf1.candles.size() > 0
+        float visual_offset = label_atr * htf_line_extension
+        float current_htf_high = htf1.candles.first().h + visual_offset
+        float current_htf_low  = htf1.candles.first().l - visual_offset
+
+        line.set_y1(htf_lines.get(0), current_htf_high)
+        line.set_y2(htf_lines.get(0), current_htf_low)
+
+        if htf_labels.size() > 0
+            label.set_y(htf_labels.get(0), current_htf_high)
+        if htf_labels_bottom.size() > 0
+            label.set_y(htf_labels_bottom.get(0), current_htf_low)
+
+    cnt += 1
+    if layout_mode == "Vertical Stacked (Same Offset)"
+        htf_offset := settings.offset
+    else
+        htf_offset += (htf1.candles.size() * settings.width) + (htf1.candles.size() > 0 ? (htf1.candles.size()-1) * settings.buffer : 0) + settings.htf_buffer
+
+if htf2.settings.show and helper.ValidTimeframe(htf2.settings.htf) and cnt < last
+    htf2.Monitor(false).Update(htf_offset, false).FindImbalance(false, ui_c1_sweep_en)
+    cnt += 1
+    if layout_mode == "Vertical Stacked (Same Offset)"
+        htf_offset := settings.offset
+    else
+        htf_offset += (htf2.candles.size() * settings.width) + (htf2.candles.size() > 0 ? (htf2.candles.size()-1) * settings.buffer : 0) + settings.htf_buffer
+
+if htf3.settings.show and helper.ValidTimeframe(htf3.settings.htf) and cnt < last
+    htf3.Monitor(false).Update(htf_offset, false).FindImbalance(false, ui_c1_sweep_en)
+    cnt += 1
+    if layout_mode == "Vertical Stacked (Same Offset)"
+        htf_offset := settings.offset
+    else
+        htf_offset += (htf3.candles.size() * settings.width) + (htf3.candles.size() > 0 ? (htf3.candles.size()-1) * settings.buffer : 0) + settings.htf_buffer
+
+if show_info_table and htf1.candles.size() > 0 and (barstate.islast or barstate.isrealtime)
+    title_text = helper.GetCurrentTimeframe() + "-" + helper.HTFName(htf1.settings.htf) + " Model"
+    timer_text = helper.RemainingTime(htf1.settings.htf)
+    asset_text = syminfo.ticker
+    chart_tf_text = helper.GetCurrentTimeframe()
+    
+    bias_text = "Bias: Neutral"
+    if htf1.candles.size() >= 3
+        last_closed = htf1.candles.get(1)
+        prev_closed = htf1.candles.get(2)
+        bias_text := helper.GetHTFBias(last_closed, prev_closed)
+
+    filter_text = "All Day"
+    if ui_filter1_en or ui_filter2_en or ui_filter3_en
+        string ft = ""
+        if ui_filter1_en
+            ft := ft + ui_filter1_time
+        if ui_filter2_en
+            ft := ft + (ft == "" ? "" : ", ") + ui_filter2_time
+        if ui_filter3_en
+            ft := ft + (ft == "" ? "" : ", ") + ui_filter3_time
+        filter_text := ft
+
+    int table_rows = (ui_tbl_frc_en ? 1 : 0) + (ui_tbl_ast_en ? 1 : 0) + (ui_tbl_ch_en ? 1 : 0) + (ui_tbl_ttc_en ? 1 : 0) + (ui_tbl_bias_en ? 1 : 0) + (ui_tbl_tf_en ? 1 : 0)
+    table_rows := math.max(table_rows, 1)
+
+    if na(info_table) or current_table_rows != table_rows
+        if not na(info_table)
+            table.delete(info_table)
+        info_table := table.new(helper.GetTablePosition(table_position), 1, table_rows,
+                               bgcolor=table_bg_color,
+                               border_width=table_border_width,
+                               border_color=table_border_color,
+                               frame_width=table_frame_width,
+                               frame_color=table_frame_color)
+        current_table_rows := table_rows
+
+    int row = 0
+    if ui_tbl_frc_en
+        table.cell(info_table, 0, row, title_text, text_color=table_text_color, text_size=info_text_size, text_font_family=font.family_monospace, bgcolor=table_bg_color)
+        row += 1
+    if ui_tbl_ast_en
+        table.cell(info_table, 0, row, asset_text, text_color=table_text_color, text_size=info_text_size, text_font_family=font.family_monospace, bgcolor=table_bg_color)
+        row += 1
+    if ui_tbl_ch_en
+        table.cell(info_table, 0, row, chart_tf_text, text_color=table_text_color, text_size=info_text_size, text_font_family=font.family_monospace, bgcolor=table_bg_color)
+        row += 1
+    if ui_tbl_ttc_en
+        table.cell(info_table, 0, row, timer_text, text_color=table_text_color, text_size=info_text_size, text_font_family=font.family_monospace, bgcolor=table_bg_color)
+        row += 1
+    if ui_tbl_bias_en
+        table.cell(info_table, 0, row, bias_text, text_color=table_text_color, text_size=info_text_size, text_font_family=font.family_monospace, bgcolor=table_bg_color)
+        row += 1
+    if ui_tbl_tf_en
+        table.cell(info_table, 0, row, filter_text, text_color=table_text_color, text_size=info_text_size, text_font_family=font.family_monospace, bgcolor=table_bg_color)
+        row += 1
+
+if enableSMT and bar_index > last_bar_index - 4500
+    if smtKeepOnlyLatest and array.size(smtArray) > 0
+        int latestBearIdx = -1
+        int latestBullIdx = -1
+        int maxBearBar = -1
+        int maxBullBar = -1
+
+        for i = 0 to array.size(smtArray) - 1
+            s_check = array.get(smtArray, i)
+            if s_check.smtType == "BEARISH" and s_check.creationBar > maxBearBar
+                maxBearBar := s_check.creationBar
+                latestBearIdx := i
+            else if s_check.smtType == "BULLISH" and s_check.creationBar > maxBullBar
+                maxBullBar := s_check.creationBar
+                latestBullIdx := i
+
+        for i = array.size(smtArray) - 1 to 0
+            if (array.get(smtArray, i).smtType == "BEARISH" and i != latestBearIdx) or (array.get(smtArray, i).smtType == "BULLISH" and i != latestBullIdx)
+                s_del = array.remove(smtArray, i)
+                line.delete(s_del.smtLine)
+
+    if barstate.islast or barstate.isrealtime
+        int szL = array.size(smtLabels)
+        if szL > 0
+            for i = 0 to szL - 1
+                label.delete(array.get(smtLabels, i))
+            array.clear(smtLabels)
+
+        int szA = array.size(smtArray)
+        if szA > 0
+            for i = szA - 1 to 0
+                s = array.get(smtArray, i)
+                if bar_index - s.creationBar > 2500
+                    line.delete(s.smtLine)
+                    array.remove(smtArray, i)
+                    continue
+
+                isB = s.smtType == "BEARISH"
+                c = smtColor
+
+                p1T = isB ? s.prevChartHighTime : s.prevChartLowTime
+                p1P = isB ? s.prevChartHigh : s.prevChartLow
+                p2T = isB ? s.currChartHighTime : s.currChartLowTime
+                p2P = isB ? s.currChartHigh : s.currChartLow
+
+                if not na(p1T) and not na(p2T)
+                    if na(s.smtLine)
+                        s.smtLine := line.new(p1T, p1P, p2T, p2P, xloc=xloc.bar_time, color=c, width=smtLineWidth)
+                    else
+                        line.set_xy1(s.smtLine, p1T, p1P)
+                        line.set_xy2(s.smtLine, p2T, p2P)
+                        line.set_color(s.smtLine, c)
+
+                    if smtShowLabel
+                        string cleanName = s.smtPair
+                        if str.contains(cleanName, ":")
+                            cleanName := array.get(str.split(cleanName, ":"), array.size(str.split(cleanName, ":")) - 1)
+                        cleanName := str.replace_all(cleanName, ".P", ""), cleanName := str.replace_all(cleanName, "1!", "")
+
+                        labelStyle = isB ? label.style_label_down : label.style_label_up
+
+                        newL = label.new((p1T+p2T)/2, (p1P+p2P)/2, cleanName,
+                                         color=color.new(color.white, 100),
+                                         textcolor=c,
+                                         style=labelStyle,
+                                         size=size.small,
+                                         xloc=xloc.bar_time)
+                        array.push(smtLabels, newL)
