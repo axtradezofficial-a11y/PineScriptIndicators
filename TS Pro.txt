@@ -1,0 +1,1015 @@
+//@version=6
+indicator("ICT Turtle Soup Model", shorttitle = "TS-Model", overlay = true,
+     max_lines_count = 500, max_labels_count = 500, max_boxes_count = 500, max_bars_back = 5000)
+
+grp_gen        = "GENERAL & MODEL SETTINGS"
+i_bias         = input.string("All",             "Bias",                  group=grp_gen, options=["All", "Bullish", "Bearish"])
+i_fractal      = input.string("5m - 1H - 4H",   "Timeframe Alignment",   group=grp_gen, options=[
+     "15s - 5m - 15m", "1m - 5m - 1H", "2m - 15m - 2H", "3m - 30m - 3H", "5m - 1H - 4H",
+     "15m - 1H - 8H", "30m - 3H - 12H", "1H - 4H - 1D", "4H - 1D - 1W", "1D - 1W - 1M",
+     "1W - 1M - 6M", "1M - 6M - 12M"])
+i_maxModels    = input.int(2,                    "History (Max Setups)",  group=grp_gen, minval=1, maxval=10)
+i_status       = input.string("All",             "Model Status Filter",   group=grp_gen, options=["All", "Active", "Formation Only", "Success Only"])
+i_requireZone  = input.bool(true,                "Require FVG / iFVG Confluence", group=grp_gen)
+i_highProbOnly = input.bool(true,                "Show Confirmed-Zone Models Only", group=grp_gen)
+
+grp_swp        = "SWEEP & ENTRY SETTINGS"
+i_showSweep    = input.bool(true,                "Sweep Line + Label",    group=grp_swp)
+i_showSArea    = input.bool(true,                "Sweep Area Box",        group=grp_swp)
+i_showDPurge   = input.bool(true,                "Double Purge (D-Purge)",group=grp_swp)
+i_swingLen     = input.int(15,                   "Context Swing Lookback",group=grp_swp, minval=2, maxval=50)
+i_bullSwpColor = input.color(color.new(#2962ff, 0), "Bullish Sweep    ", group=grp_swp, inline="swp_bull")
+i_swpLineWidth = input.int(1,                    "Width",                 group=grp_swp, inline="swp_bull", minval=1, maxval=4)
+i_bearSwpColor = input.color(color.new(#f23645, 0), "Bearish Sweep    ", group=grp_swp, inline="swp_bear")
+i_swpZoneTransp= input.int(90,                   "Opacity",               group=grp_swp, inline="swp_bear", minval=0, maxval=100)
+i_swpLabelSize = input.string("Tiny",            "Sweep Label Size",      group=grp_swp, options=["Tiny", "Small", "Normal", "Large"])
+i_showISweep   = input.bool(true,                "Show i-Sweep Retest?",  group=grp_swp)
+i_iswpColor    = input.color(color.black,        "i-Sweep Style    ",     group=grp_swp, inline="iswp")
+i_iswpStyle    = input.string("Dotted",          "",                      group=grp_swp, inline="iswp", options=["Solid", "Dashed", "Dotted"])
+i_iswpWidth    = input.int(1,                    "",                      group=grp_swp, inline="iswp", minval=1, maxval=4)
+i_iswpLabelSz  = input.string("Tiny",            "Text Size",             group=grp_swp, inline="iswp", options=["Tiny", "Small", "Normal", "Large"])
+i_entryColor   = input.color(color.new(#2962FF, 0), "Entry Marker      ", group=grp_swp, inline="entry")
+i_entrySize    = input.string("Auto",            "Size",                  group=grp_swp, inline="entry", options=["Auto", "Tiny", "Small", "Normal", "Large", "Huge"])
+
+grp_mss        = "MARKET STRUCTURE SHIFT (MSS)"
+i_showMSS      = input.bool(true,                "Show MSS Break?",       group=grp_mss)
+i_mssConfirm   = input.string("Close",           "Break Confirmation",    group=grp_mss, options=["Close", "Wick"])
+i_mssLeft      = input.int(3,                    "MSS Pivots Left",       group=grp_mss, inline="mss_piv", minval=1)
+i_mssRight     = input.int(3,                    "Right",                 group=grp_mss, inline="mss_piv", minval=1)
+i_mssMaxBars   = input.int(60,                   "Max Waiting Bars",      group=grp_mss, minval=5, maxval=500)
+i_bullMssCol   = input.color(color.new(#2962FF, 0), "Bullish MSS     ",  group=grp_mss, inline="mss_bull")
+i_mssLineStyle = input.string("Solid",           "",                      group=grp_mss, inline="mss_bull", options=["Solid", "Dashed", "Dotted"])
+i_mssLineWidth = input.int(1,                    "",                      group=grp_mss, inline="mss_bull", minval=1, maxval=4)
+i_bearMssCol   = input.color(color.new(#FF5252, 0), "Bearish MSS Color",  group=grp_mss)
+
+grp_liq        = "LIQUIDITY LEVELS (BSL / SSL)"
+i_showLiquidity= input.bool(true,                "Show Liquidity Levels?",group=grp_liq)
+i_liqMaxShown  = input.int(2,                    "Max Levels Per Side",   group=grp_liq, minval=1, maxval=20)
+i_bslColor     = input.color(color.new(#4e5057, 25), "Buy Side (BSL)   ", group=grp_liq, inline="liq_col")
+i_sslColor     = input.color(color.new(#4e5057, 25), "Sell Side (SSL)",   group=grp_liq, inline="liq_col")
+i_liqLineStyle = input.string("Dotted",          "Line Style       ",     group=grp_liq, inline="liq_stl", options=["Solid", "Dashed", "Dotted"])
+i_liqLineWidth = input.int(1,                    "Width",                 group=grp_liq, inline="liq_stl", minval=1, maxval=4)
+
+grp_ltf        = "LTF FVG / iFVG (PD ARRAYS)"
+i_showPDArrayLTF = input.bool(true,              "Show FVG / iFVG Zone?", group=grp_ltf)
+i_ltfLookback  = input.int(10,                   "Lookback (Bars)",       group=grp_ltf, minval=3, maxval=40)
+i_fvgBullColor = input.color(color.new(#2962FF, 75), "Bullish Zone Color",group=grp_ltf, inline="fvg_col")
+i_fvgBearColor = input.color(color.new(#FF5252, 75), "Bearish Zone Color",group=grp_ltf, inline="fvg_col")
+i_showZoneCE   = input.bool(true,                "Consequent Encroachment (CE)", group=grp_ltf, inline="zoneCe")
+i_zoneCeStyle  = input.string("Dotted",          "",                      group=grp_ltf, inline="zoneCe", options=["Solid", "Dashed", "Dotted"])
+i_zoneCeWidth  = input.int(1,                    "",                      group=grp_ltf, inline="zoneCe", minval=1, maxval=4)
+
+grp_sd         = "STANDARD DEVIATION PROJECTIONS"
+i_showSD       = input.bool(true,                "Show Projections?",     group=grp_sd)
+i_sdCount      = input.int(2,                    "Levels Count     ",     group=grp_sd, inline="sd_cfg", minval=1, maxval=4)
+i_sdExtend     = input.int(2,                    "Extension Bars",        group=grp_sd, inline="sd_cfg", minval=1, maxval=200)
+i_sdBullColor  = input.color(color.new(#2962FF, 0), "Bullish Target   ", group=grp_sd, inline="sd_col")
+i_sdBearColor  = input.color(color.new(#FF5252, 0), "Bearish Target",     group=grp_sd, inline="sd_col")
+i_sdWidth      = input.int(1,                    "Line Width       ",     group=grp_sd, inline="sd_stl", minval=1, maxval=4)
+i_sdLabelSize  = input.string("Small",           "Label Size",            group=grp_sd, inline="sd_stl", options=["Tiny", "Small", "Normal"])
+
+grp_htf        = "HTF CANDLES & PANELS"
+i_showHTFCandles = input.bool(true,              "Show HTF Candle Panels?", group=grp_htf)
+i_showPDArrayHTF = input.bool(true,              "Show HTF PD Array (FVG)", group=grp_htf)
+i_showNYOpen   = input.bool(true,                "True Day Open Line",    group=grp_htf)
+i_htfCount     = input.int(7,                    "Candles Count    ",     group=grp_htf, inline="htf_dim", minval=2, maxval=15)
+i_htfSize      = input.int(2,                    "Width",                 group=grp_htf, inline="htf_dim", minval=2, maxval=20)
+i_htfSpace     = input.int(1,                    "Spacing",               group=grp_htf, inline="htf_dim", minval=0, maxval=10)
+i_htfOffset    = input.int(20,                   "Offset From Chart",     group=grp_htf, minval=1)
+i_htfBullBody  = input.color(color.new(#83b785, 0), "Bull Body/Border ", group=grp_htf, inline="htf_bull")
+i_htfBullBorder= input.color(color.new(#5f5f5f, 0), "",                   group=grp_htf, inline="htf_bull")
+i_htfBearBody  = input.color(color.new(#5f5f5f, 0), "Bear Body/Border ", group=grp_htf, inline="htf_bear")
+i_htfBearBorder= input.color(color.new(#5f5f5f, 0), "",                   group=grp_htf, inline="htf_bear")
+
+grp_filt       = "TIME FILTER (KILLZONES)"
+i_showKzShade  = input.bool(true,                "Shade Active Killzone", group=grp_filt)
+i_useAsia      = input.bool(false,               "Asia Session     ",     group=grp_filt, inline="kzAsia")
+i_asiaSess     = input.session("2000-0000",      "",                      group=grp_filt, inline="kzAsia")
+i_useLondon    = input.bool(false,               "London Session   ",     group=grp_filt, inline="kzLondon")
+i_londonSess   = input.session("0200-0500",      "",                      group=grp_filt, inline="kzLondon")
+i_useNYAM      = input.bool(false,               "NY AM Session    ",     group=grp_filt, inline="kzNYAM")
+i_nyAmSess     = input.session("0700-1000",      "",                      group=grp_filt, inline="kzNYAM")
+i_useNYLaunch  = input.bool(false,               "NY Lunch Session ",     group=grp_filt, inline="kzNYLunch")
+i_nyLunchSess  = input.session("1000-1100",      "",                      group=grp_filt, inline="kzNYLunch")
+i_useNYPM      = input.bool(false,               "NY PM Session    ",     group=grp_filt, inline="kzNYPM")
+i_nyPmSess     = input.session("1330-1600",      "",                      group=grp_filt, inline="kzNYPM")
+i_useCustom    = input.bool(false,               "Custom Session   ",     group=grp_filt, inline="kzCustom")
+i_customSess   = input.session("0000-0000",      "",                      group=grp_filt, inline="kzCustom")
+
+grp_dash       = "INFO TABLE / DASHBOARD"
+i_showDashboard= input.bool(true,                "Show Dashboard?",       group=grp_dash)
+i_dashPosition = input.string("Bottom Right",    "Table Location",        group=grp_dash, options=["Top Right", "Top Left", "Top Center", "Bottom Right", "Bottom Left", "Bottom Center"])
+i_dashHeaderSz = input.string("Normal",          "Header Size      ",     group=grp_dash, inline="dash_sz", options=["Small", "Normal", "Large"])
+i_dashRowSz    = input.string("Small",           "Row Size",              group=grp_dash, inline="dash_sz", options=["Tiny", "Small", "Normal"])
+i_dashBg       = input.color(color.new(#e2e2e2, 100), "Background / Text / Border", group=grp_dash, inline="dash_col")
+i_dashText     = input.color(color.new(#000000, 0), "",                   group=grp_dash, inline="dash_col")
+i_dashBorder   = input.color(color.new(#000000, 100), "",                   group=grp_dash, inline="dash_col")
+
+grp_alert      = "ALERTS SETTINGS"
+i_alertOnSweep  = input.bool(true,                "Alert On Sweep?",       group=grp_alert)
+i_alertOnMSS    = input.bool(true,                "Alert On MSS?",         group=grp_alert)
+i_alertOnEntry  = input.bool(true,                "Alert On Entry (Inner Sweep)?", group=grp_alert)
+i_alertOnSucc   = input.bool(true,                "Alert On Target Hit?",  group=grp_alert)
+i_alertOnInvalid= input.bool(true,                "Alert On Invalidation?", group=grp_alert)
+
+type SwingPoint
+    float price
+    int   barIndex
+    bool  taken = false
+
+type TSModel
+    bool    isBull
+    int     sweepBar
+    float   sweepLevel
+    float   sweepExtreme
+    int     swingBar       = na
+    int     mssBar         = na
+    float   mssLevel       = na
+    bool    mssConfirmed   = false
+    bool    zoneConfluence = false
+    string  zoneType       = ""
+    float   zoneTop        = na
+    float   zoneBot        = na
+    int     zoneBar        = na
+    bool    doublePurge    = false
+    string  status         = "Formation"
+    float   innerTarget     = na
+    bool    innerSwept      = false
+    int     innerSweepBar   = na
+    line    innerLine       = na
+    label   innerLabel      = na
+    bool    entryConfirmed  = false
+    int     entryBar        = na
+    float   entryPrice      = na
+    line    sweepLine      = na
+    label   sweepLabel     = na
+    line    mssLine        = na
+    label   mssLabel       = na
+    box     sArea          = na
+    box     zoneBox        = na
+    line    zoneCe         = na
+    label   dpLabel        = na
+    label   c1Label        = na
+    line[]  sdLines
+    label[] sdLabels
+
+f_labelSize(s) =>
+    s == "Auto" ? size.auto : s == "Tiny" ? size.tiny : s == "Small" ? size.small : s == "Normal" ? size.normal : s == "Large" ? size.large : size.huge
+
+f_fmtTF(tf) =>
+    _s = timeframe.in_seconds(tf)
+    _s < 60     ? str.tostring(math.round(_s)) + "s" :
+     _s < 3600   ? str.tostring(math.round(_s/60)) + "m" :
+     _s < 86400  ? str.tostring(math.round(_s/3600)) + "H" :
+     _s < 604800 ? str.tostring(math.round(_s/86400)) + "D" :
+     _s < 2592000? str.tostring(math.round(_s/604800)) + "W" : str.tostring(math.round(_s/2592000)) + "M"
+
+f_tablePos(p) =>
+    switch p
+        "Top Right"     => position.top_right
+        "Top Left"      => position.top_left
+        "Top Center"    => position.top_center
+        "Bottom Right"  => position.bottom_right
+        "Bottom Left"   => position.bottom_left
+        "Bottom Center" => position.bottom_center
+        =>                 position.bottom_right
+
+f_countdown(ms) =>
+    _ms = math.max(ms, 0)
+    _d = int(_ms / 86400000)
+    _ms -= _d * 86400000
+    _h = int(_ms / 3600000)
+    _ms -= _h * 3600000
+    _m = int(_ms / 60000)
+    _ms -= _m * 60000
+    _s = int(_ms / 1000)
+    (_d > 0 ? str.tostring(_d) + "D " : "") + str.tostring(_h) + "H:" + str.tostring(_m) + "m:" + str.tostring(_s) + "s"
+
+f_fractalTF(label) =>
+    string mid = "60"
+    string htf = "240"
+    if label == "15s - 5m - 15m"
+        mid := "5",  htf := "15"
+    else if label == "1m - 5m - 1H"
+        mid := "5",  htf := "60"
+    else if label == "2m - 15m - 2H"
+        mid := "15", htf := "120"
+    else if label == "3m - 30m - 3H"
+        mid := "30", htf := "180"
+    else if label == "5m - 1H - 4H"
+        mid := "60",  htf := "240"
+    else if label == "15m - 1H - 8H"
+        mid := "60", htf := "480"
+    else if label == "30m - 3H - 12H"
+        mid := "180",htf := "720"
+    else if label == "1H - 4H - 1D"
+        mid := "240",htf := "1D"
+    else if label == "4H - 1D - 1W"
+        mid := "1D", htf := "1W"
+    else if label == "1D - 1W - 1M"
+        mid := "1W", htf := "1M"
+    else if label == "1W - 1M - 6M"
+        mid := "1M", htf := "6M"
+    else if label == "1M - 6M - 12M"
+        mid := "6M", htf := "12M"
+    [mid, htf]
+
+f_findFVG(bool wantBull, int lookback) =>
+    bool  _found = false
+    float _top   = na
+    float _bot   = na
+    int   _bar   = na
+    for b = 0 to lookback - 3
+        if wantBull
+            if low[b] > high[b + 2]
+                _found := true
+                _top   := low[b]
+                _bot   := high[b + 2]
+                _bar   := bar_index - b - 2
+        else
+            if high[b] < low[b + 2]
+                _found := true
+                _top   := low[b + 2]
+                _bot   := high[b]
+                _bar   := bar_index - b - 2
+        if _found
+            break
+    [_found, _top, _bot, _bar]
+
+f_findIFVG(bool wantBull, int lookback) =>
+    bool  _found = false
+    float _top   = na
+    float _bot   = na
+    int   _bar   = na
+    for b = 0 to lookback - 3
+        if wantBull
+            if high[b] < low[b + 2]
+                float _t = low[b + 2]
+                float _bt = high[b]
+                if close > _t
+                    _found := true
+                    _top   := _t
+                    _bot   := _bt
+                    _bar   := bar_index - b - 2
+        else
+            if low[b] > high[b + 2]
+                float _t = low[b]
+                float _bt = high[b + 2]
+                if close < _bt
+                    _found := true
+                    _top   := _t
+                    _bot   := _bt
+                    _bar   := bar_index - b - 2
+        if _found
+            break
+    [_found, _top, _bot, _bar]
+
+f_scanZone(bool wantBull, int lookback) =>
+    [fFound, fTop, fBot, fBar] = f_findFVG(wantBull, lookback)
+    if fFound
+        [true, "FVG", fTop, fBot, fBar]
+    else
+        [iFound, iTop, iBot, iBar] = f_findIFVG(wantBull, lookback)
+        [iFound, "iFVG", iTop, iBot, iBar]
+
+f_deleteModel(TSModel m) =>
+    if not na(m.sweepLine)
+        line.delete(m.sweepLine)
+    if not na(m.sweepLabel)
+        label.delete(m.sweepLabel)
+    if not na(m.mssLine)
+        line.delete(m.mssLine)
+    if not na(m.mssLabel)
+        label.delete(m.mssLabel)
+    if not na(m.sArea)
+        box.delete(m.sArea)
+    if not na(m.zoneBox)
+        box.delete(m.zoneBox)
+    if not na(m.zoneCe)
+        line.delete(m.zoneCe)
+    if not na(m.dpLabel)
+        label.delete(m.dpLabel)
+    if not na(m.c1Label)
+        label.delete(m.c1Label)
+    if not na(m.innerLine)
+        line.delete(m.innerLine)
+    if not na(m.innerLabel)
+        label.delete(m.innerLabel)
+    if not na(m.sdLines)
+        while array.size(m.sdLines) > 0
+            line.delete(array.shift(m.sdLines))
+    if not na(m.sdLabels)
+        while array.size(m.sdLabels) > 0
+            label.delete(array.shift(m.sdLabels))
+
+f_hideModel(TSModel m) =>
+    f_deleteModel(m)
+    m.sweepLine := na, m.sweepLabel := na, m.mssLine := na, m.mssLabel := na
+    m.sArea := na, m.zoneBox := na, m.zoneCe := na, m.dpLabel := na, m.c1Label := na
+    m.innerLine := na, m.innerLabel := na
+
+f_shouldShow(TSModel m) =>
+    _statusOK = i_status == "All" or
+                 (i_status == "Active" and m.status != "Success" and m.status != "Invalidation") or
+                 (i_status == "Formation Only" and m.status == "Formation") or
+                 (i_status == "Success Only" and m.status == "Success")
+    _biasOK   = i_bias == "All" or (i_bias == "Bullish" and m.isBull) or (i_bias == "Bearish" and not m.isBull)
+    _probOK   = not i_highProbOnly or m.zoneConfluence
+    _statusOK and _biasOK and _probOK
+
+[midTFstr, htfTFstr] = f_fractalTF(i_fractal)
+
+var array<SwingPoint> bslArray = array.new<SwingPoint>()
+var array<SwingPoint> sslArray = array.new<SwingPoint>()
+
+var array<float> mssHighPrices = array.new_float()
+var array<int>   mssHighBars   = array.new_int()
+var array<float> mssLowPrices  = array.new_float()
+var array<int>   mssLowBars    = array.new_int()
+
+var array<TSModel> models = array.new<TSModel>()
+
+var line  nyOpenLine  = na
+var label nyOpenLabel = na
+var float trueDayOpen = na
+
+var box htfFvgBox = na
+
+var table hud = na
+
+var line[]  bslLines  = array.new_line()
+var label[] bslLabels = array.new_label()
+var line[]  sslLines  = array.new_line()
+var label[] sslLabels = array.new_label()
+
+f_inSess(s) => not na(time(timeframe.period, s, "America/New_York"))
+
+inAsia     = f_inSess(i_asiaSess)
+inLondon   = f_inSess(i_londonSess)
+inNYAM     = f_inSess(i_nyAmSess)
+inNYLaunch = f_inSess(i_nyLunchSess)
+inNYPM     = f_inSess(i_nyPmSess)
+inCustom   = f_inSess(i_customSess)
+
+anyKzSelected = i_useAsia or i_useLondon or i_useNYAM or i_useNYLaunch or i_useNYPM or i_useCustom
+kzActive = (i_useAsia and inAsia) or (i_useLondon and inLondon) or (i_useNYAM and inNYAM) or
+     (i_useNYLaunch and inNYLaunch) or (i_useNYPM and inNYPM) or (i_useCustom and inCustom)
+allowNewModel = not anyKzSelected or kzActive
+
+kzColor = (i_useAsia and inAsia) ? color.new(#ffd54f, 88) :
+     (i_useLondon and inLondon) ? color.new(#42a5f5, 88) :
+     (i_useNYAM and inNYAM) ? color.new(#66bb6a, 88) :
+     (i_useNYLaunch and inNYLaunch) ? color.new(#ffa726, 88) :
+     (i_useNYPM and inNYPM) ? color.new(#ab47bc, 88) : na
+bgcolor(i_showKzShade and anyKzSelected ? kzColor : na, title = "Killzone Shading")
+
+isNewNYDay = f_inSess("0000-0001")
+if i_showNYOpen and isNewNYDay and not isNewNYDay[1]
+    trueDayOpen := open
+    if not na(nyOpenLine)
+        line.delete(nyOpenLine)
+    if not na(nyOpenLabel)
+        label.delete(nyOpenLabel)
+    nyOpenLine  := line.new(bar_index, trueDayOpen, bar_index, trueDayOpen, color = color.new(color.gray, 40), style = line.style_dotted)
+    nyOpenLabel := label.new(bar_index, trueDayOpen, "NY Open", style = label.style_label_left, color = color.new(color.black, 100), textcolor = color.gray, size = size.small)
+if i_showNYOpen and not na(nyOpenLine)
+    line.set_x2(nyOpenLine, bar_index + 10)
+    label.set_x(nyOpenLabel, bar_index + 10)
+
+pivH = ta.pivothigh(high, i_swingLen, i_swingLen)
+pivL = ta.pivotlow(low,  i_swingLen, i_swingLen)
+
+if not na(pivH)
+    int _actualBar = bar_index - i_swingLen
+    array.push(bslArray, SwingPoint.new(pivH, _actualBar))
+    while array.size(bslArray) > 60
+        array.shift(bslArray)
+if not na(pivL)
+    int _actualBar = bar_index - i_swingLen
+    array.push(sslArray, SwingPoint.new(pivL, _actualBar))
+    while array.size(sslArray) > 60
+        array.shift(sslArray)
+
+phLocal = ta.pivothigh(high, i_mssLeft, i_mssRight)
+plLocal = ta.pivotlow(low,  i_mssLeft, i_mssRight)
+if not na(phLocal)
+    array.push(mssHighPrices, phLocal), array.push(mssHighBars, bar_index - i_mssRight)
+if not na(plLocal)
+    array.push(mssLowPrices, plLocal), array.push(mssLowBars, bar_index - i_mssRight)
+while array.size(mssHighBars) > 80
+    array.shift(mssHighBars), array.shift(mssHighPrices)
+while array.size(mssLowBars) > 80
+    array.shift(mssLowBars), array.shift(mssLowPrices)
+
+f_lineStyle(s) =>
+    s == "Solid" ? line.style_solid : s == "Dotted" ? line.style_dotted : line.style_dashed
+
+f_drawLiquiditySide(array<SwingPoint> arr, line[] lArr, label[] lbArr, color col, string txt) =>
+    for ln in lArr
+        line.delete(ln)
+    for lb in lbArr
+        label.delete(lb)
+    array.clear(lArr)
+    array.clear(lbArr)
+    int _shown = 0
+    if array.size(arr) > 0
+        for i = array.size(arr) - 1 to 0
+            SwingPoint sp = array.get(arr, i)
+            if not sp.taken and _shown < i_liqMaxShown
+                line  _l  = line.new(sp.barIndex, sp.price, bar_index + 10, sp.price,
+                                     color = col,
+                                     style = f_lineStyle(i_liqLineStyle),
+                                     width = i_liqLineWidth)
+                label _lb = label.new(bar_index + 10, sp.price, txt,
+                                     style = label.style_label_left,
+                                     color = color.new(color.black, 100),
+                                     textcolor = col,
+                                     size = size.small)
+                array.push(lArr, _l)
+                array.push(lbArr, _lb)
+                _shown += 1
+
+if i_showLiquidity and barstate.islast
+    f_drawLiquiditySide(bslArray, bslLines, bslLabels, i_bslColor, "BSL")
+    f_drawLiquiditySide(sslArray, sslLines, sslLabels, i_sslColor, "SSL")
+
+f_newModel(bool isBull, float sweepLevel, float sweepExtreme, int swingBar) =>
+    m = TSModel.new(isBull, bar_index, sweepLevel, sweepExtreme)
+    m.swingBar := swingBar
+    m.sdLines  := array.new_line()
+    m.sdLabels := array.new_label()
+    array.push(models, m)
+    while array.size(models) > i_maxModels
+        f_deleteModel(array.shift(models))
+    if i_alertOnSweep
+        alert((isBull ? "Bullish" : "Bearish") + " Turtle Soup Sweep @ " + str.tostring(sweepExtreme), alert.freq_once_per_bar_close)
+    m
+
+if i_showSweep and array.size(bslArray) > 0
+    for i = array.size(bslArray) - 1 to 0
+        SwingPoint sp = array.get(bslArray, i)
+        if not sp.taken and high > sp.price and bar_index > sp.barIndex
+            sp.taken := true
+            if close < sp.price
+                if allowNewModel and (i_bias == "All" or i_bias == "Bearish")
+                    f_newModel(false, sp.price, high, sp.barIndex)
+
+if i_showSweep and array.size(sslArray) > 0
+    for i = array.size(sslArray) - 1 to 0
+        SwingPoint sp = array.get(sslArray, i)
+        if not sp.taken and low < sp.price and bar_index > sp.barIndex
+            sp.taken := true
+            if close > sp.price
+                if allowNewModel and (i_bias == "All" or i_bias == "Bullish")
+                    f_newModel(true, sp.price, low, sp.barIndex)
+
+f_findInnerSwing(bool isBull, float zTop, float zBot, int zBar) =>
+    float _target = na
+    if isBull
+        if array.size(mssLowBars) > 0
+            for k = array.size(mssLowBars) - 1 to 0
+                int   _b = array.get(mssLowBars, k)
+                float _p = array.get(mssLowPrices, k)
+                if _b >= zBar and _p <= zTop and _p >= zBot
+                    _target := _p
+                    break
+    else
+        if array.size(mssHighBars) > 0
+            for k = array.size(mssHighBars) - 1 to 0
+                int   _b = array.get(mssHighBars, k)
+                float _p = array.get(mssHighPrices, k)
+                if _b >= zBar and _p <= zTop and _p >= zBot
+                    _target := _p
+                    break
+    _target
+
+f_checkMSS(TSModel m) =>
+    bool _breach = m.isBull ? low < m.sweepExtreme : high > m.sweepExtreme
+    if _breach
+        if i_showDPurge and not m.doublePurge
+            m.doublePurge := true
+            m.sweepExtreme := m.isBull ? low : high
+            m.sweepBar := bar_index
+            m.dpLabel := label.new(bar_index, m.sweepExtreme, "D-Purge",
+                 style = m.isBull ? label.style_label_up : label.style_label_down,
+                 color = color.new(color.black, 100), textcolor = color.orange, size = size.tiny)
+        else
+            m.status := "Invalidation"
+            if i_alertOnInvalid
+                alert((m.isBull ? "Bullish" : "Bearish") + " Turtle Soup Setup Invalidated", alert.freq_once_per_bar_close)
+
+    if m.status != "Invalidation" and not m.mssConfirmed
+        int _bars = bar_index - m.sweepBar
+        if _bars > i_mssMaxBars
+            m.status := "Invalidation"
+            if i_alertOnInvalid
+                alert((m.isBull ? "Bullish" : "Bearish") + " Turtle Soup Setup Invalidated (Timeout)", alert.freq_once_per_bar_close)
+        else if _bars > int(i_mssMaxBars * 0.75)
+            m.status := "Pre-Invalidation"
+
+        if m.status != "Invalidation"
+            if m.isBull
+                int targetBar = na
+                float targetPrice = na
+                if array.size(mssHighBars) > 0
+                    for k = array.size(mssHighBars) - 1 to 0
+                        int _hb = array.get(mssHighBars, k)
+                        if _hb < bar_index and _hb >= m.sweepBar - 8
+                            targetBar := _hb
+                            targetPrice := array.get(mssHighPrices, k)
+                            break
+                if not na(targetBar)
+                    bool _breakUp = (i_mssConfirm == "Close" ? close : high) > targetPrice
+                    if _breakUp and bar_index > targetBar
+                        [_zFound, _zType, _zTop, _zBot, _zBar] = f_scanZone(true, i_ltfLookback)
+                        if not i_requireZone or _zFound
+                            m.mssConfirmed   := true
+                            m.mssBar         := bar_index
+                            m.mssLevel       := targetPrice
+                            m.zoneConfluence := _zFound
+                            m.zoneType       := _zType
+                            m.zoneTop        := _zTop
+                            m.zoneBot        := _zBot
+                            m.zoneBar        := _zBar
+                            if _zType == "FVG"
+                                m.innerTarget := _zTop
+                            else
+                                float _sw = f_findInnerSwing(true, _zTop, _zBot, _zBar)
+                                m.innerTarget := na(_sw) ? _zBot : _sw
+                            m.status := _zFound ? "Awaiting Retest" : "Formation"
+                            if i_showMSS
+                                m.mssLine := line.new(targetBar, targetPrice, bar_index, targetPrice, color = i_bullMssCol, width = i_mssLineWidth, style = f_lineStyle(i_mssLineStyle))
+                                m.mssLabel := label.new(math.round((targetBar + bar_index) / 2), targetPrice, "MSS",
+                                     style = label.style_label_down, color = color.new(color.black, 100), textcolor = i_bullMssCol, size = size.small)
+                            if i_alertOnMSS
+                                alert("Bullish MSS Confirmed @ " + str.tostring(close), alert.freq_once_per_bar_close)
+            else
+                int targetBar = na
+                float targetPrice = na
+                if array.size(mssLowBars) > 0
+                    for k = array.size(mssLowBars) - 1 to 0
+                        int _lb = array.get(mssLowBars, k)
+                        if _lb < bar_index and _lb >= m.sweepBar - 8
+                            targetBar := _lb
+                            targetPrice := array.get(mssLowPrices, k)
+                            break
+                if not na(targetBar)
+                    bool _breakDn = (i_mssConfirm == "Close" ? close : low) < targetPrice
+                    if _breakDn and bar_index > targetBar
+                        [_zFound, _zType, _zTop, _zBot, _zBar] = f_scanZone(false, i_ltfLookback)
+                        if not i_requireZone or _zFound
+                            m.mssConfirmed   := true
+                            m.mssBar         := bar_index
+                            m.mssLevel       := targetPrice
+                            m.zoneConfluence := _zFound
+                            m.zoneType       := _zType
+                            m.zoneTop        := _zTop
+                            m.zoneBot        := _zBot
+                            m.zoneBar        := _zBar
+                            if _zType == "FVG"
+                                m.innerTarget := _zBot
+                            else
+                                float _sw = f_findInnerSwing(false, _zTop, _zBot, _zBar)
+                                m.innerTarget := na(_sw) ? _zTop : _sw
+                            m.status := _zFound ? "Awaiting Retest" : "Formation"
+                            if i_showMSS
+                                m.mssLine := line.new(targetBar, targetPrice, bar_index, targetPrice, color = i_bearMssCol, width = i_mssLineWidth, style = f_lineStyle(i_mssLineStyle))
+                                m.mssLabel := label.new(math.round((targetBar + bar_index) / 2), targetPrice, "MSS",
+                                     style = label.style_label_up, color = color.new(color.black, 100), textcolor = i_bearMssCol, size = size.small)
+                            if i_alertOnMSS
+                                alert("Bearish MSS Confirmed @ " + str.tostring(close), alert.freq_once_per_bar_close)
+
+f_checkInnerSweep(TSModel m) =>
+    if m.status == "Awaiting Retest" and not na(m.innerTarget)
+        bool _hit = m.isBull ? (low <= m.innerTarget) : (high >= m.innerTarget)
+        if _hit
+            m.innerSwept    := true
+            m.innerSweepBar := bar_index
+            if i_showISweep
+                m.innerLine  := line.new(m.zoneBar, m.innerTarget, bar_index, m.innerTarget,
+                     color = i_iswpColor,
+                     width = i_iswpWidth,
+                     style = f_lineStyle(i_iswpStyle))
+                int _innerMidX = math.round((m.zoneBar + bar_index) / 2)
+                m.innerLabel := label.new(_innerMidX, m.innerTarget, "iSweep",
+                     style = m.isBull ? label.style_label_up : label.style_label_down,
+                     color = color.new(color.black, 100),
+                     textcolor = i_iswpColor,
+                     size = f_labelSize(i_iswpLabelSz))
+            m.entryConfirmed := true
+            m.entryBar       := bar_index
+            m.entryPrice     := close
+            m.status         := "Formation"
+            if i_alertOnEntry
+                alert((m.isBull ? "Bullish" : "Bearish") + " Turtle Soup Entry Confirmed @ " + str.tostring(m.entryPrice), alert.freq_once_per_bar_close)
+            float _entryOffset = (high - low) * 0.25
+            float _entryLabelY = m.isBull ? (low - _entryOffset) : (high + _entryOffset)
+            m.c1Label := label.new(bar_index, _entryLabelY, "",
+                 style = m.isBull ? label.style_triangleup : label.style_triangledown,
+                 color = i_entryColor,
+                 size = f_labelSize(i_entrySize))
+    m
+
+f_checkSD(TSModel m) =>
+    float _range = math.abs(m.mssLevel - m.sweepExtreme)
+    float _dir   = m.isBull ? 1.0 : -1.0
+    color _sdCol = m.isBull ? i_sdBullColor : i_sdBearColor
+    var float[] levels = array.from(1.0, 2.0, 2.5, 4.0)
+    if i_showSD and _range > 0 and not na(m.entryBar)
+        float _entryClose = m.entryPrice
+        int _x1   = m.entryBar
+        int _x2   = m.entryBar + i_sdExtend
+        int _lblX = _x2 + 1
+        int numLevels = math.min(i_sdCount, 4)
+        for idx = 0 to numLevels - 1
+            float _lvl = array.get(levels, idx)
+            float _price = _entryClose + _dir * _range * _lvl
+            string _txt = _lvl == 1.0 ? (m.isBull ? "1" : "-1") :
+                          _lvl == 2.0 ? (m.isBull ? "2" : "-2") :
+                          _lvl == 2.5 ? (m.isBull ? "2.5" : "-2.5") :
+                          (m.isBull ? "4" : "-4")
+            if array.size(m.sdLines) <= idx
+                line _ln = line.new(_x1, _price, _x2, _price,
+                                    color = _sdCol,
+                                    width = i_sdWidth,
+                                    style = line.style_solid)
+                label _lb = label.new(_lblX, _price, _txt,
+                                      style     = label.style_none,
+                                      textcolor = _sdCol,
+                                      size      = f_labelSize(i_sdLabelSize))
+                array.push(m.sdLines,  _ln)
+                array.push(m.sdLabels, _lb)
+            if _lvl == 1.0 and m.status != "Success" and m.status != "Invalidation"
+                bool _hit = m.isBull ? (high >= _price) : (low <= _price)
+                if _hit
+                    m.status := "Success"
+                    if i_alertOnSucc
+                        alert((m.isBull ? "Bullish" : "Bearish") + " Turtle Soup Target 1 Reached",
+                              alert.freq_once_per_bar_close)
+
+for m in models
+    if m.mssConfirmed and m.status != "Invalidation" and m.status != "Success"
+        bool _globalInvalid = m.isBull ? (close < m.sweepExtreme) : (close > m.sweepExtreme)
+        if _globalInvalid
+            m.status := "Invalidation"
+            if i_alertOnInvalid
+                alert((m.isBull ? "Bullish" : "Bearish") + " Turtle Soup Setup Invalidated", alert.freq_once_per_bar_close)
+    if m.status != "Invalidation"
+        if not m.mssConfirmed
+            f_checkMSS(m)
+        else if m.status == "Awaiting Retest"
+            f_checkInnerSweep(m)
+        else
+            f_checkSD(m)
+
+f_drawZoneBox(TSModel m) =>
+    if i_showPDArrayLTF and m.zoneConfluence
+        color _bg     = m.isBull ? color.new(i_fvgBullColor, 85) : color.new(i_fvgBearColor, 85)
+        color _txtCol = m.isBull ? color.new(i_fvgBullColor, 0) : color.new(i_fvgBearColor, 0)
+        int   _end    = bar_index + 10
+        float _ce     = (m.zoneTop + m.zoneBot) / 2
+        color _ceCol  = m.isBull ? color.new(i_fvgBullColor, 40) : color.new(i_fvgBearColor, 40)
+        if na(m.zoneBox)
+            m.zoneBox := box.new(m.zoneBar, m.zoneTop, _end, m.zoneBot,
+                                 border_color = color.new(color.white, 100),
+                                 bgcolor = _bg,
+                                 text = m.zoneType,
+                                 text_size = size.tiny,
+                                 text_color = _txtCol,
+                                 text_halign = text.align_right,
+                                 text_valign = text.align_center)
+            if i_showZoneCE
+                m.zoneCe := line.new(m.zoneBar, _ce, _end, _ce,
+                                     color = _ceCol,
+                                     width = i_zoneCeWidth,
+                                     style = f_lineStyle(i_zoneCeStyle))
+            box.set_bgcolor(m.zoneBox, _bg)
+            true
+        else
+            box.set_bgcolor(m.zoneBox, _bg)
+            if i_showZoneCE
+                if na(m.zoneCe)
+                    m.zoneCe := line.new(m.zoneBar, _ce, _end, _ce,
+                                         color = _ceCol,
+                                         width = i_zoneCeWidth,
+                                         style = f_lineStyle(i_zoneCeStyle))
+                    true
+                else
+                    line.set_color(m.zoneCe, _ceCol)
+                    line.set_width(m.zoneCe, i_zoneCeWidth)
+                    line.set_style(m.zoneCe, f_lineStyle(i_zoneCeStyle))
+                    true
+            else
+                if not na(m.zoneCe)
+                    line.delete(m.zoneCe)
+                    m.zoneCe := na
+                true
+            true
+    else
+        if not na(m.zoneBox)
+            box.delete(m.zoneBox)
+            m.zoneBox := na
+        if not na(m.zoneCe)
+            line.delete(m.zoneCe)
+            m.zoneCe := na
+        true
+
+f_drawModel(TSModel m) =>
+    color _themeCol = m.isBull ? i_bullSwpColor : i_bearSwpColor
+    float _top = math.max(m.sweepLevel, m.sweepExtreme)
+    float _bot = math.min(m.sweepLevel, m.sweepExtreme)
+    int _endBar = na(m.mssBar) ? bar_index : m.mssBar + 4
+    if i_showSweep
+        if na(m.sweepLine)
+            m.sweepLine := line.new(m.swingBar, m.sweepLevel, _endBar, m.sweepLevel,
+                                    color = color.new(_themeCol, 20), style = line.style_solid, width = i_swpLineWidth)
+        else
+            line.set_color(m.sweepLine, color.new(_themeCol, 20))
+            line.set_width(m.sweepLine, i_swpLineWidth)
+            line.set_x1(m.sweepLine, m.swingBar)
+            line.set_x2(m.sweepLine, _endBar)
+        if na(m.sweepLabel)
+            m.sweepLabel := label.new(m.sweepBar, m.sweepExtreme, "Sweep",
+                 style = m.isBull ? label.style_label_up : label.style_label_down,
+                 color = color.new(color.black, 100), textcolor = _themeCol, size = f_labelSize(i_swpLabelSize))
+        else
+            label.set_textcolor(m.sweepLabel, _themeCol)
+            label.set_size(m.sweepLabel, f_labelSize(i_swpLabelSize))
+        if i_showSArea
+            color _zoneBg = color.new(_themeCol, i_swpZoneTransp)
+            if na(m.sArea)
+                m.sArea := box.new(m.swingBar, _top, _endBar, _bot,
+                                   border_color = color.new(color.white, 100),
+                                   bgcolor = _zoneBg)
+            else
+                box.set_left(m.sArea, m.swingBar)
+                box.set_right(m.sArea, _endBar)
+                box.set_top(m.sArea, _top)
+                box.set_bottom(m.sArea, _bot)
+                box.set_bgcolor(m.sArea, _zoneBg)
+                box.set_border_color(m.sArea, color.new(color.white, 100))
+    if m.mssConfirmed
+        f_drawZoneBox(m)
+
+for m in models
+    if f_shouldShow(m)
+        f_drawModel(m)
+    else
+        f_hideModel(m)
+
+var box[]   p1_boxes = array.new_box()
+var line[]  p1_lines = array.new_line()
+var line[]  p1_swps  = array.new_line()
+var label   p1_label = na
+
+var box[]   p2_boxes = array.new_box()
+var line[]  p2_lines = array.new_line()
+var line[]  p2_swps  = array.new_line()
+var label   p2_label = na
+
+[m_o0, m_h0, m_l0, m_c0, m_o1, m_h1, m_l1, m_c1, m_o2, m_h2, m_l2, m_c2, m_o3, m_h3, m_l3, m_c3, m_o4, m_h4, m_l4, m_c4, m_o5, m_h5, m_l5, m_c5] = request.security(
+     syminfo.tickerid, midTFstr,
+     [open[0], high[0], low[0], close[0],
+      open[1], high[1], low[1], close[1],
+      open[2], high[2], low[2], close[2],
+      open[3], high[3], low[3], close[3],
+      open[4], high[4], low[4], close[4],
+      open[5], high[5], low[5], close[5]], lookahead = barmerge.lookahead_off)
+
+[h_o0, h_h0, h_l0, h_c0, h_o1, h_h1, h_l1, h_c1, h_o2, h_h2, h_l2, h_c2, h_o3, h_h3, h_l3, h_c3, h_o4, h_h4, h_l4, h_c4, h_o5, h_h5, h_l5, h_c5, htfCloseMs] = request.security(
+     syminfo.tickerid, htfTFstr,
+     [open[0], high[0], low[0], close[0],
+      open[1], high[1], low[1], close[1],
+      open[2], high[2], low[2], close[2],
+      open[3], high[3], low[3], close[3],
+      open[4], high[4], low[4], close[4],
+      open[5], high[5], low[5], close[5], time_close], lookahead = barmerge.lookahead_off)
+
+var line htfCeLine = na
+
+if i_showPDArrayHTF and barstate.islast
+    float[] m_highs = array.from(m_h0, m_h1, m_h2, m_h3, m_h4, m_h5)
+    float[] m_lows  = array.from(m_l0, m_l1, m_l2, m_l3, m_l4, m_l5)
+    bool  fvgFound = false
+    bool  isBull   = false
+    float fvgTop   = na
+    float fvgBot   = na
+    int   fvgIdx   = na
+    for i = 0 to 3
+        float _low_i = array.get(m_lows, i)
+        float _high_i2 = array.get(m_highs, i + 2)
+        if _low_i > _high_i2
+            bool mitigated = false
+            if i > 0
+                for j = 0 to i - 1
+                    float _low_j = array.get(m_lows, j)
+                    if _low_j < _high_i2
+                        mitigated := true
+                        break
+            if not mitigated
+                fvgFound := true
+                isBull   := true
+                fvgTop   := _low_i
+                fvgBot   := _high_i2
+                fvgIdx   := i
+                break
+        else
+            float _high_i = array.get(m_highs, i)
+            float _low_i2 = array.get(m_lows, i + 2)
+            if _high_i < _low_i2
+                bool mitigated = false
+                if i > 0
+                    for j = 0 to i - 1
+                        float _high_j = array.get(m_highs, j)
+                        if _high_j > _low_i2
+                            mitigated := true
+                            break
+                if not mitigated
+                    fvgFound := true
+                    isBull   := false
+                    fvgTop   := _low_i2
+                    fvgBot   := _high_i
+                    fvgIdx   := i
+                    break
+    if fvgFound
+        float _ce      = (fvgTop + fvgBot) / 2
+        color _fvgCol  = isBull ? color.new(#2962FF, 85) : color.new(#FF5252, 85)
+        color _ceCol   = isBull ? color.new(#2962FF, 40) : color.new(#FF5252, 40)
+        color _bordCol = color.new(color.white, 100)
+        if not na(htfFvgBox)
+            box.delete(htfFvgBox)
+        if not na(htfCeLine)
+            line.delete(htfCeLine)
+        int p1Start = bar_index + i_htfOffset
+        int nCandles = math.min(i_htfCount, 6)
+        int fvgStartBar = p1Start + (nCandles - 3 - fvgIdx) * (i_htfSize + i_htfSpace)
+        int fvgEndBar   = p1Start + nCandles * (i_htfSize + i_htfSpace) + 4
+        htfFvgBox := box.new(fvgStartBar, fvgTop, fvgEndBar, fvgBot,
+                             border_color = _bordCol,
+                             bgcolor = _fvgCol,
+                             text = "FVG",
+                             text_size = size.tiny,
+                             text_color = color.new(color.gray, 50),
+                             text_halign = text.align_left,
+                             text_valign = isBull ? text.align_bottom : text.align_top)
+        htfCeLine := line.new(fvgStartBar, _ce, fvgEndBar, _ce,
+                              color = _ceCol, width = 1, style = line.style_dotted)
+    else
+        if not na(htfFvgBox)
+            box.delete(htfFvgBox)
+            htfFvgBox := na
+        if not na(htfCeLine)
+            line.delete(htfCeLine)
+            htfCeLine := na
+
+f_renderHTFPanel(string tfName, int xStart, int count,
+                 float o0, float h0, float l0, float c0,
+                 float o1, float h1, float l1, float c1,
+                 float o2, float h2, float l2, float c2,
+                 float o3, float h3, float l3, float c3,
+                 float o4, float h4, float l4, float c4,
+                 float o5, float h5, float l5, float c5,
+                 box[] bArray, line[] lArray, line[] sArray, label tagObj) =>
+    for b in bArray
+        box.delete(b)
+    for l in lArray
+        line.delete(l)
+    for s in sArray
+        line.delete(s)
+    array.clear(bArray)
+    array.clear(lArray)
+    array.clear(sArray)
+    float[] oArr = array.from(o0, o1, o2, o3, o4, o5)
+    float[] hArr = array.from(h0, h1, h2, h3, h4, h5)
+    float[] lArr = array.from(l0, l1, l2, l3, l4, l5)
+    float[] cArr = array.from(c0, c1, c2, c3, c4, c5)
+    color colBull     = i_htfBullBody
+    color colBear     = i_htfBearBody
+    color colBordBull = i_htfBullBorder
+    color colBordBear = i_htfBearBorder
+    int nCandles = math.min(count, 6)
+    float panelMaxH = -1.0e10
+    for k = 0 to nCandles - 1
+        int idx = nCandles - 1 - k
+        float _o = array.get(oArr, idx)
+        float _h = array.get(hArr, idx)
+        float _l = array.get(lArr, idx)
+        float _c = array.get(cArr, idx)
+        panelMaxH := math.max(panelMaxH, _h)
+        bool isBull = _c >= _o
+        int posX = xStart + k * (i_htfSize + i_htfSpace)
+        int midX = posX + int(i_htfSize / 2)
+        color currentBorder = isBull ? colBordBull : colBordBear
+        color currentBody   = isBull ? colBull : colBear
+        box b = box.new(posX, math.max(_o, _c), posX + i_htfSize, math.min(_o, _c),
+                        border_color = currentBorder, bgcolor = currentBody)
+        array.push(bArray, b)
+        line wu = line.new(midX, _h, midX, math.max(_o, _c), color = currentBorder, width = 1)
+        array.push(lArray, wu)
+        line wd = line.new(midX, math.min(_o, _c), midX, _l, color = currentBorder, width = 1)
+        array.push(lArray, wd)
+        if idx < nCandles - 1
+            float prevH = array.get(hArr, idx + 1)
+            float prevL = array.get(lArr, idx + 1)
+            int prevMidX = xStart + (k - 1) * (i_htfSize + i_htfSpace) + int(i_htfSize / 2)
+            if _h > prevH and _c < prevH and close < prevH
+                line swp = line.new(prevMidX, prevH, posX + i_htfSize + 2, prevH, color = color.new(color.black, 15), width = 1)
+                array.push(sArray, swp)
+            if _l < prevL and _c > prevL and close > prevL
+                line swp = line.new(prevMidX, prevL, posX + i_htfSize + 2, prevL, color = color.new(color.black, 15), width = 1)
+                array.push(sArray, swp)
+    int midPanelX = xStart + int((nCandles * (i_htfSize + i_htfSpace)) / 2)
+    label resLabel = tagObj
+    if na(tagObj)
+        resLabel := label.new(midPanelX, panelMaxH, f_fmtTF(tfName), style = label.style_none,
+                              textcolor = color.black, size = size.normal, textalign = text.align_center)
+    else
+        label.set_xy(resLabel, midPanelX, panelMaxH)
+        label.set_text(resLabel, f_fmtTF(tfName))
+    resLabel
+
+if i_showHTFCandles and barstate.islast
+    int p1X = bar_index + i_htfOffset
+    p1_label := f_renderHTFPanel(midTFstr, p1X, i_htfCount,
+                                 m_o0, m_h0, m_l0, m_c0,
+                                 m_o1, m_h1, m_l1, m_c1,
+                                 m_o2, m_h2, m_l2, m_c2,
+                                 m_o3, m_h3, m_l3, m_c3,
+                                 m_o4, m_h4, m_l4, m_c4,
+                                 m_o5, m_h5, m_l5, m_c5,
+                                 p1_boxes, p1_lines, p1_swps, p1_label)
+    int p2X = p1X + i_htfCount * (i_htfSize + i_htfSpace) + 12
+    p2_label := f_renderHTFPanel(htfTFstr, p2X, math.min(i_htfCount, 3),
+                                 h_o0, h_h0, h_l0, h_c0,
+                                 h_o1, h_h1, h_l1, h_c1,
+                                 h_o2, h_h2, h_l2, h_c2,
+                                 h_o3, h_h3, h_l3, h_c3,
+                                 h_o4, h_h4, h_l4, h_c4,
+                                 h_o5, h_h5, h_l5, h_c5,
+                                 p2_boxes, p2_lines, p2_swps, p2_label)
+
+f_getActiveModel() =>
+    TSModel _res = na
+    if array.size(models) > 0
+        for i = array.size(models) - 1 to 0
+            TSModel m = array.get(models, i)
+            if m.status != "Invalidation"
+                _res := m
+                break
+        if na(_res)
+            _res := array.get(models, array.size(models) - 1)
+    _res
+
+f_pad2(int n) =>
+    str.length(str.tostring(n)) == 1 ? "0" + str.tostring(n) : str.tostring(n)
+
+f_pad3(int n) =>
+    string _s = str.tostring(n)
+    _s := str.length(_s) == 1 ? "00" + _s : str.length(_s) == 2 ? "0" + _s : _s
+    _s
+
+f_setupCode(TSModel m) =>
+    int _seedBar = not na(m) ? m.sweepBar : bar_index
+    int _id3     = math.abs(_seedBar) % 1000
+    int _t = time
+    string _dateStr = str.tostring(year(_t)) + "-" + f_pad2(month(_t)) + "-" + f_pad2(dayofmonth(_t))
+    _dateStr + " (" + f_pad3(_id3) + ")"
+
+if i_showDashboard and barstate.islast
+    if na(hud)
+        hud := table.new(f_tablePos(i_dashPosition), 1, 6, bgcolor = i_dashBg, frame_color = i_dashBorder, frame_width = 1, border_width = 1, border_color = i_dashBorder)
+    TSModel m = f_getActiveModel()
+    string _mTitle = i_fractal + " Model"
+    string _time   = f_countdown(htfCloseMs - timenow)
+    string _bias   = not na(m) ? (m.isBull ? "Bullish" : "Bearish") : "Neutral"
+    string _ticker = syminfo.prefix + ":" + syminfo.ticker
+    string _setup  = f_setupCode(m)
+    string _status = not na(m) ? (m.status == "Success" ? "Successful" : m.status) : "Active"
+    table.cell(hud, 0, 0, _mTitle,            text_color = i_dashText, text_size = f_labelSize(i_dashHeaderSz))
+    table.cell(hud, 0, 1, _time,               text_color = i_dashText, text_size = f_labelSize(i_dashRowSz))
+    table.cell(hud, 0, 2, "Bias: " + _bias,    text_color = i_dashText, text_size = f_labelSize(i_dashRowSz))
+    table.cell(hud, 0, 3, _ticker,             text_color = i_dashText, text_size = f_labelSize(i_dashRowSz))
+    table.cell(hud, 0, 4, _setup,              text_color = i_dashText, text_size = f_labelSize(i_dashRowSz))
+    table.cell(hud, 0, 5, "Status: " + _status,text_color = i_dashText, text_size = f_labelSize(i_dashRowSz))
+
+bullSweptThisBar = false
+bearSweptThisBar = false
+bullMSSThisBar   = false
+bearMSSThisBar   = false
+bullEntryThisBar = false
+bearEntryThisBar = false
+if array.size(models) > 0
+    TSModel _lm = array.get(models, array.size(models) - 1)
+    bullSweptThisBar := _lm.isBull and _lm.sweepBar == bar_index
+    bearSweptThisBar := not _lm.isBull and _lm.sweepBar == bar_index
+    bullMSSThisBar   := _lm.isBull and _lm.mssConfirmed and _lm.mssBar == bar_index
+    bearMSSThisBar   := not _lm.isBull and _lm.mssConfirmed and _lm.mssBar == bar_index
+    bullEntryThisBar := _lm.isBull and not na(_lm.entryBar) and _lm.entryBar == bar_index
+    bearEntryThisBar := not _lm.isBull and not na(_lm.entryBar) and _lm.entryBar == bar_index
+
+alertcondition(bullSweptThisBar, title = "Bullish Turtle Soup Sweep", message = "{{ticker}}: Bullish Turtle Soup sweep on {{interval}}")
+alertcondition(bearSweptThisBar, title = "Bearish Turtle Soup Sweep", message = "{{ticker}}: Bearish Turtle Soup sweep on {{interval}}")
+alertcondition(bullMSSThisBar, title = "Bullish MSS Confirmed", message = "{{ticker}}: Bullish MSS confirmed on {{interval}}")
+alertcondition(bearMSSThisBar, title = "Bearish MSS Confirmed", message = "{{ticker}}: Bearish MSS confirmed on {{interval}}")
+alertcondition(bullEntryThisBar, title = "Bullish Turtle Soup Entry", message = "{{ticker}}: Bullish Turtle Soup entry confirmed on {{interval}}")
+alertcondition(bearEntryThisBar, title = "Bearish Turtle Soup Entry", message = "{{ticker}}: Bearish Turtle Soup entry confirmed on {{interval}}")
