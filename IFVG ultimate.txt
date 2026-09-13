@@ -1,0 +1,1742 @@
+//@version=6
+indicator("IFVG Ultimate+", overlay = true, max_bars_back = 5000, max_labels_count = 500, max_lines_count = 500, max_boxes_count = 500, dynamic_requests = true)
+
+//#region[Inputs]
+grpGeneral = "General Settings"
+ifvgMode          = input.string("Single", title = "Detection", options = ["Single", "Series"], group = grpGeneral)
+biasMode          = input.string("Neutral", title = "Bias", options = ["Neutral", "Bullish", "Bearish"], group = grpGeneral)
+allowExtIFVG      = input.bool(true, title = "Allow 7 - 15 Candle IFVGs", tooltip = "If enabled, IFVGs may form within 15 candles.\nIf disabled, they must form within 6 candles.", group = grpGeneral)
+requireBEIntact   = input.bool(true, title = "Require BE not breached on inversion", group = grpGeneral, tooltip = "If true, setups where the confirmation candle itself already reaches B.E are completely hidden.")
+onlyShowSweptIFVG = input.bool(false, title = "Only show IFVGs with HTF sweep", group = grpGeneral, tooltip = "If true, an IFVG setup is only shown/confirmed if an HTF sweep occurred during its swing (per the Swing Sweep Filter setting).")
+setupHistory      = input.int(2, "Number of Setups Displayed", minval = 0, maxval = 50, group = grpGeneral, tooltip = "Number of valid IFVG setups (active, or resolved at the Validity Criteria set in the Limits group) to keep drawn on the chart. Invalidated (stopped out) setups are removed immediately and never count toward this limit. 0 = unlimited.")
+
+grpLiquidity = "Liquidity"
+htfMode           = input.string("Auto", "Alignment Mode", options = ["Auto", "Custom"], group = grpLiquidity, inline = "htf")
+customHTF         = input.timeframe("60", "Custom", group = grpLiquidity, inline = "htf", active = htfMode == "Custom")
+showSweep         = input.bool(true, "Show Sweeps", group = grpLiquidity)
+sweepColorBuy     = input.color(color.gray, "Bullish Sweep", group = grpLiquidity, inline = "sweepcolor", active = showSweep)
+sweepColorSell    = input.color(color.gray, "Bearish Sweep", group = grpLiquidity, inline = "sweepcolor", active = showSweep)
+sweepWidth        = input.int(1, "Width", minval = 1, maxval = 4, group = grpLiquidity, inline = "sweepstyle", active = showSweep)
+sweepStyleStr     = input.string("Dotted", "Style", options = ["Dotted", "Dashed", "Solid"], group = grpLiquidity, inline = "sweepstyle", active = showSweep)
+sweepLabelText    = input.string("$$$", "Label Text", group = grpLiquidity, inline = "sweeplabel", active = showSweep, tooltip = "Texto padrão do label de varrida. Se o nível varrido for PDH/PDL/PWH/PWL, o nome do nível aparece no lugar dele (ver opção abaixo).")
+namePDLevels      = input.bool(true, "Name PD/PW Levels", group = grpLiquidity, inline = "pdname", active = showSweep, tooltip = "Quando o nível varrido coincidir com o topo/fundo do dia anterior (PDH/PDL) ou da semana anterior (PWH/PWL), o label mostra o nome do nível em vez do texto padrão.\n\nSemanal tem prioridade sobre diário quando os dois batem no mesmo preço.\nCada nome é usado UMA vez por período: num cluster de equal highs em cima do PDH, só a primeira varrida leva o nome — as demais voltam ao texto padrão, para não empilhar labels iguais no mesmo preço.")
+pdTolTicks        = input.int(2, "Tol (ticks)", minval = 0, maxval = 100, group = grpLiquidity, inline = "pdname", active = showSweep and namePDLevels, tooltip = "Folga em ticks para considerar que o nível varrido é o mesmo preço do PDH/PDL/PWH/PWL.")
+declutterSweep    = input.bool(true, "Avoid Label Overlap", group = grpLiquidity, inline = "declut", active = showSweep, tooltip = "Impede que dois labels de liquidez fiquem colados. Quando um label novo nasce perto de um antigo, o ANTIGO tem o texto apagado (a linha continua no gráfico).\nExceção: um nível nomeado (PDH/PDL/PWH/PWL) nunca é apagado por um label genérico — nesse caso quem fica sem texto é o genérico.")
+sweepGapBars      = input.int(12, "Bars", minval = 1, maxval = 200, group = grpLiquidity, inline = "declut", active = showSweep and declutterSweep, tooltip = "Distância horizontal mínima, em barras, entre dois labels de liquidez.")
+sweepGapAtr       = input.float(0.25, "ATR", minval = 0.01, maxval = 5, step = 0.05, group = grpLiquidity, inline = "declut", active = showSweep and declutterSweep, tooltip = "Distância vertical mínima entre dois labels, em múltiplos do ATR(14). Usa ATR para funcionar igual em qualquer ativo.")
+sweepLabelSizeStr = input.string("Tiny", "Label Size", options = ["Tiny", "Small", "Normal", "Large"], group = grpLiquidity, inline = "sweeplabel", active = showSweep)
+
+grpIFVG = "IFVG"
+colorIFVGBull     = input.color(color.blue, "Long Color", group = grpIFVG, inline = "ifvgline")
+colorIFVGBear     = input.color(color.red, "Short Color", group = grpIFVG, inline = "ifvgline")
+colorIFVGBullBox  = input.color(color.new(color.gray, 50), "Bullish IFVG", group = grpIFVG, inline = "ifvgbox")
+colorIFVGBearBox  = input.color(color.new(color.gray, 50), "Bearish IFVG", group = grpIFVG, inline = "ifvgbox")
+ifvgLineText      = input.string("IFVG", "Label Text", group = grpIFVG, inline = "ifvgtext")
+textSizeStr       = input.string("Small", "Label Size", options = ["Tiny", "Small", "Normal", "Large"], group = grpIFVG, inline = "ifvgtext")
+
+grpHTFFVG = "HTF FVG"
+showHtfFvg        = input.bool(true, "Show HTF FVG", group = grpHTFFVG)
+htfFvgTfMode      = input.string("Auto", "Timeframe", options = ["Auto", "Custom"], group = grpHTFFVG, inline = "hfvgtf", active = showHtfFvg, tooltip = "Auto = usa o mesmo timeframe do grupo Liquidity (Alignment Mode).\nCustom = escolha livre. FVGs de timeframe menor que o do gráfico são ignorados.")
+htfFvgCustomTF    = input.timeframe("60", "", group = grpHTFFVG, inline = "hfvgtf", active = showHtfFvg and htfFvgTfMode == "Custom")
+htfFvgBullColor   = input.color(color.new(color.blue, 0), "Bullish", group = grpHTFFVG, inline = "hfvgcolor", active = showHtfFvg, tooltip = "A zona não tem contorno: a cor é usada no preenchimento (transparência fixa de 90), na linha do CE e no texto do label.")
+htfFvgBearColor   = input.color(color.new(color.red, 0), "Bearish", group = grpHTFFVG, inline = "hfvgcolor", active = showHtfFvg)
+htfFvgExt         = input.int(4, "Extensão (barras)", minval = 0, maxval = 50, group = grpHTFFVG, active = showHtfFvg, tooltip = "Quantas barras à DIREITA da barra atual a zona se projeta. É nesse trecho, fora do preço, que fica o label — encostado por dentro da ponta direita.")
+htfFvgCount       = input.int(3, "Max FVGs per Side", minval = 1, maxval = 20, group = grpHTFFVG, active = showHtfFvg, tooltip = "Quantos FVGs de alta e de baixa do timeframe maior ficam no gráfico. Os mais antigos são apagados.")
+htfFvgKeepFilled  = input.bool(false, "Keep Invalidated FVGs", group = grpHTFFVG, inline = "hfvgfill", active = showHtfFvg, tooltip = "Se ativado, o FVG invalidado para de se estender e fica com a cor neutra ao lado (útil para acompanhar inversões). Se desativado, é apagado do gráfico.\n\nREGRA DE INVALIDAÇÃO: só no FECHAMENTO de um candle do timeframe maior, e só pelo CORPO (open/close) — pavio não invalida. O corpo precisa atravessar o gap inteiro e fechar além da borda de ORIGEM (o lado distal), não apenas tocar a borda mais próxima.")
+htfFvgFilledColor = input.color(color.new(color.gray, 50), "", group = grpHTFFVG, inline = "hfvgfill", active = showHtfFvg and htfFvgKeepFilled)
+showHtfFvgLabel   = input.bool(true, "Show Timeframe Label", group = grpHTFFVG, active = showHtfFvg)
+
+grpSMT = "SMT"
+showSMT        = input.bool(true, "Show SMT", group = grpSMT)
+smt_srcMode    = input.string("Triad", "Asset Source", options = ["Triad", "Auto (IFVG)", "Manual"], group = grpSMT, active = showSMT, tooltip = "De onde saem os até 2 ativos correlacionados usados pelo SMT.\n\nTriad: a correlação automática do PO3 — índices futuros entre si (NQ/ES/YM), metais, forex, cripto e índices CFD. Segue a CLASSE do contrato do gráfico: micro casa com micro (MNQ -> MES1! + MYM1!, MGC -> SIL1!) e mini com mini (NQ -> ES1! + YM1!, GC -> SI1!). Fora dessa lista o SMT fica desligado.\n\nAuto (IFVG): o pareamento próprio do IFVG, que respeita a CLASSE do contrato e monta o símbolo do par com o PREFIXO da corretora do gráfico (útil em CFD: NAS100 -> SPX500/US30 na mesma corretora).\n\nManual: você escolhe os dois símbolos abaixo.")
+smt_manA2      = input.symbol("", "Asset 2", group = grpSMT, inline = "massets2", active = showSMT and smt_srcMode == "Manual")
+smt_manInv2    = input.bool(false, "Invert", group = grpSMT, inline = "massets2", active = showSMT and smt_srcMode == "Manual", tooltip = "Marque se o par for inversamente correlacionado (ex.: DXY contra EURUSD).")
+smt_manA3      = input.symbol("", "Asset 3", group = grpSMT, inline = "massets3", active = showSMT and smt_srcMode == "Manual")
+smt_manInv3    = input.bool(false, "Invert", group = grpSMT, inline = "massets3", active = showSMT and smt_srcMode == "Manual")
+smt_eA         = input.bool(true, "Adjacent Wicks", group = grpSMT, inline = "m", active = showSMT, tooltip = "Detector vela contra vela: o gráfico supera o extremo da vela anterior e o par NÃO supera o dele. Pega o SMT que o detector de pivô não enxerga.\n\nGera bem mais sinal que o de pivô e NÃO conta como confluência na tabela. Cada sinal é apagado quando o par finalmente toma o próprio nível.")
+smt_eP         = input.bool(true, "Pivots", group = grpSMT, inline = "m", active = showSMT, tooltip = "Detector de pivô: compara o pivô atual com o anterior nos dois ativos. É o único que conta como confluência na tabela (e só no grau FORTE).")
+smt_L1         = input.int(5, "Primary", minval = 2, group = grpSMT, inline = "l", active = showSMT and smt_eP, tooltip = "TRÊS escalas de pivô rodam ao mesmo tempo (primária / secundária / terciária), como no PO3. Swings de tamanhos diferentes topam em momentos diferentes; uma escala só deixa passar muito SMT válido.\n\nCada valor é o número de candles à esquerda/direita para confirmar o pivô — o sinal aparece N candles depois dele.")
+smt_L2         = input.int(8, "Secondary", minval = 2, group = grpSMT, inline = "l", active = showSMT and smt_eP)
+smt_L3         = input.int(3, "Tertiary", minval = 2, group = grpSMT, inline = "l", active = showSMT and smt_eP)
+showSmtWeak    = input.bool(true, "Show Weak Divergence", group = grpSMT, inline = "smtweak", active = showSMT and smt_eP, tooltip = "SMT FORTE = o ativo do gráfico TOMA o topo/fundo anterior e o correlacionado NÃO toma. É a definição ICT: liquidez varrida sem participação do par.\n\nDIVERGÊNCIA FRACA = o inverso (o gráfico falha e o correlacionado toma). Não é SMT de manual, mas mostra qual dos dois está liderando. Aparece esmaecida e NÃO conta como confluência na tabela.")
+smt_wkFade     = input.int(60, "Fade", minval = 0, maxval = 95, group = grpSMT, inline = "smtweak", active = showSMT and smt_eP and showSmtWeak)
+smt_c1         = input.color(#636363, "Line Color (Asset 2)", group = grpSMT, inline = "c", active = showSMT, tooltip = "No motor do PO3 a cor identifica QUAL ativo divergiu, não a direção do sinal.")
+smt_lw         = input.int(1, "Width", minval = 1, maxval = 4, group = grpSMT, inline = "c", active = showSMT)
+smt_ls         = input.string("Solid", "Style", options = ["Solid", "Dotted", "Dashed"], group = grpSMT, inline = "c", active = showSMT)
+smt_c2         = input.color(#636363, "Line Color (Asset 3)", group = grpSMT, inline = "c2", active = showSMT)
+smt_lz         = input.string("Tiny", "Label Size", options = ["Auto", "Tiny", "Small", "Normal", "Large", "Huge"], group = grpSMT, active = showSMT)
+smt_showLabels = input.bool(true, "Show Labels", group = grpSMT, active = showSMT, tooltip = "O label do SMT mostra o ticker do par correlacionado que divergiu (ex.: ES1!).")
+smt_mxShow     = input.int(10, "Max SMT Signals on Chart", minval = 1, maxval = 100, group = grpSMT, active = showSMT, tooltip = "Mantém só os N sinais mais recentes de cada tipo (pavios por direção/ativo e pivôs). Os mais antigos são apagados.")
+
+grpSMTFVG = "SMT | FVG"
+smt_eF       = input.bool(true, "Enable FVG SMT", group = grpSMTFVG, active = showSMT, tooltip = "SMT medido por FVG em vez de topo/fundo: o gráfico forma (ou mitiga) um FVG e o correlacionado não tem o FVG equivalente aberto no mesmo intervalo. Motor copiado do PO3.\n\nNÃO conta como confluência na tabela.")
+smt_fMaxAge  = input.int(50, "Max Bars Between FVGs to Compare", minval = 5, group = grpSMTFVG, active = showSMT and smt_eF, tooltip = "Distância máxima, em barras, entre o FVG de um ativo e o do outro para que os dois ainda sejam considerados o mesmo evento.")
+smt_fShowBox = input.bool(true, "Show FVG Boxes", group = grpSMTFVG, active = showSMT and smt_eF, tooltip = "Desenha o FVG aberto que está sendo comparado (o do gráfico e o do par). Ao mitigar, a caixa some.")
+smt_fMxShow  = input.int(10, "Max FVG SMT Signals on Chart", minval = 1, maxval = 50, group = grpSMTFVG, active = showSMT and smt_eF, tooltip = "Mantém só os N sinais de SMT de FVG mais recentes (caixa + linha + label). Os mais antigos são apagados.")
+smt_fBoxTr   = input.int(84, "Box Transparency", minval = 0, maxval = 100, group = grpSMTFVG, active = showSMT and smt_eF)
+
+grpLimits = "Limits"
+showSL      = input.bool(true, title = "Stoploss", group = grpLimits, inline = "sl")
+colorSL     = input.color(color.gray, title = "", group = grpLimits, inline = "sl")
+slPlacement = input.string("Wick", title = "Stoploss Placement", options = ["Wick", "Body", "IFVG"], group = grpLimits, inline = "sl")
+showBE      = input.bool(true, title = "Break Even", group = grpLimits, inline = "be", tooltip = "Mostra a linha do nível de validade do setup. O nível exibido segue o 'Critério de Validade' escolhido abaixo: B.E (nível do swing) ou 1R (entrada + 1x o risco).")
+colorBE     = input.color(color.orange, title = "", group = grpLimits, inline = "be")
+validityCriteria = input.string("B.E", title = "Critério de Validade", options = ["B.E", "1R"], group = grpLimits, tooltip = "Nível que o preço precisa atingir para o setup ser considerado válido. Usado pela opção 'Congelar após atingir critério' abaixo e para contar no histórico de setups (Number of Setups Displayed).")
+freezeAfterValid = input.bool(true, title = "Congelar após atingir critério (ignora SL depois)", group = grpLimits, tooltip = "Se ativado (padrão): assim que o setup atinge o critério de validade escolhido acima, ele fica congelado e permanece desenhado no gráfico mesmo que o preço depois volte e viole o SL.\nSe desativado: o setup continua sendo monitorado mesmo após atingir o critério — se o preço voltar e violar o SL, o setup é apagado normalmente, igual a um stop-out comum.")
+
+grpRR = "Risk/Reward"
+showRR  = input.bool(true, "Enable Projections?", group = grpRR, inline = "rrb")
+rrInput = input.string("1,2", "", group = grpRR, inline = "rrb", active = showRR)
+rrColor = input.color(color.gray, "", group = grpRR, inline = "rrc", active = showRR)
+rrStyle = input.string("Dashed", "", options = ["Solid", "Dashed", "Dotted"], group = grpRR, inline = "rrc", active = showRR)
+rrWidth = input.int(1, "", minval = 1, group = grpRR, inline = "rrc", active = showRR)
+
+grpAlerts = "Alerts"
+enableAlerts   = input.bool(true, "Enable Alerts", group = grpAlerts, tooltip = "Master switch. Alerts only fire when this is enabled AND the confirmation candle falls within an enabled session below.")
+session1Enable = input.bool(true, "Session 1", group = grpAlerts, inline = "s1")
+session1Time   = input.session("0930-1600", "", group = grpAlerts, inline = "s1")
+session2Enable = input.bool(false, "Session 2", group = grpAlerts, inline = "s2")
+session2Time   = input.session("2000-0000", "", group = grpAlerts, inline = "s2")
+session3Enable = input.bool(false, "Session 3", group = grpAlerts, inline = "s3")
+session3Time   = input.session("0200-0500", "", group = grpAlerts, inline = "s3")
+
+grpWatermark  = "Watermark"
+showWatermark = input.bool(true, title = "Show?", inline = "wm1", group = grpWatermark)
+wmTextColor   = input.color(#000000, title = "", inline = "wm1", group = grpWatermark)
+wmSize1Str    = input.string("Normal", title = "Title/Symbol Size", inline = "wm2", group = grpWatermark, options = ["Tiny", "Small", "Normal", "Large", "Huge"])
+wmSize3Str    = input.string("Small", title = "Date Size", inline = "wm3", group = grpWatermark, options = ["Tiny", "Small", "Normal", "Large", "Huge"])
+//#endregion
+
+//#region[Inputs - Confluence Table]
+grpTable            = "Confluence Table"
+showConfluenceTable = input.bool(true, "Show Confluence Table", group = grpTable)
+tablePositionStr    = input.string("Bottom Right", "Position", group = grpTable, options = ["Top Right", "Top Left", "Bottom Right", "Bottom Left", "Middle Right"])
+tableTextSizeStr    = input.string("Small", "Text Size", group = grpTable, options = ["Tiny", "Small", "Normal", "Large"])
+colorMarkValid      = input.color(color.lime, "V", group = grpTable, inline = "tmarks")
+colorMarkInvalid    = input.color(color.red, "X", group = grpTable, inline = "tmarks")
+colorTableBg        = input.color(color.new(color.black, 85), "Fundo", group = grpTable)
+colorTableHeader     = input.color(color.new(color.gray, 60), "Cabeçalho", group = grpTable)
+tableMarkStyle      = input.string("Emoji", "Marcas", options = ["Emoji", "Texto"], group = grpTable, tooltip = "Emoji = ✅/❌. Texto = V/X, que usa as duas cores acima (emoji ignora cor).")
+deltaMinRatio       = input.float(0.25, "Delta Imbalance mín.", minval = 0, maxval = 1, step = 0.05, group = grpTable, tooltip = "Desequilíbrio mínimo de delta no candle de confirmação para o critério bater.\n\nO delta é aproximado pelo volume de um timeframe MENOR dentro do candle (input \"Delta: TF intrabar\"): volume das velas que fecharam em alta menos o das que fecharam em baixa, dividido pelo volume total. 0,25 = 25% do volume do candle a favor da direção do setup.\n\nSem dado intrabar (histórico antigo demais, ativo sem volume) o critério aparece como traço e SAI da conta da nota.")
+targetMinR          = input.float(1.0, "Clear Target mín. (R)", minval = 0, maxval = 10, step = 0.5, group = grpTable, tooltip = "Distância mínima entre a entrada e a liquidez alvo, em múltiplos do risco (entrada até o stop), para o critério Clear Targets bater. 0 = qualquer distância serve.")
+deltaTfStr          = input.string("Auto", "Delta: TF intrabar", options = ["Auto", "1S", "5S", "10S", "15S", "30S", "1m", "5m"], group = grpTable, tooltip = "Timeframe menor usado para aproximar o delta dentro do candle de confirmação.\n\nAuto = 1/6 do TF do gráfico, nunca abaixo de 1 minuto — funciona em qualquer plano do TradingView. Num gráfico de 1m ou 2m isso dá só 1 ou 2 amostras por candle, ou seja, um delta grosseiro.\n\nOs valores em segundos dão um delta muito melhor, mas exigem plano com dado de segundos: sem ele o critério aparece como traço e SAI da conta da nota (não conta como falha).")
+// ATENCAO: este input e declarado no FIM do bloco de inputs de proposito. O TradingView
+// guarda os valores por ORDEM (in_0, in_1, ...), entao input novo no meio do arquivo
+// embaralharia os ajustes ja salvos nos graficos.
+liqAtTol            = input.float(0.15, "Liquidity Sweep: folga (ATR)", minval = 0, maxval = 2, step = 0.05, group = grpTable, tooltip = "Segundo caminho do criterio Liquidity Sweep, medido por PRECO em vez de tempo.\n\nAlem de aceitar o setup cujo swing de origem varreu liquidez, aceita tambem quando a zona do IFVG nasceu NA ALTURA de um nivel $$$ que ja tinha sido varrido. Este valor e a folga vertical, em multiplos do ATR(14).\n\n0 = o nivel varrido tem que cair exatamente dentro da zona do IFVG.")
+smtCountWicks       = input.bool(false, "SMT: pavio adjacente conta na tabela", group = grpTable, tooltip = "Por padrao a coluna SMT da tabela so aceita o detector de PIVO e no grau FORTE - a definicao ICT: o ativo do grafico toma o topo/fundo anterior e o correlacionado nao toma.\n\nLigando isto, o detector Adjacent Wicks (vela contra vela: o grafico supera o extremo da vela anterior e o par nao supera o dele) tambem marca a coluna. Ele gera BEM mais sinal que o de pivo, entao espere notas mais altas em geral.\n\nO SMT de FVG e a divergencia FRACA continuam sem contar em qualquer caso.\n\nObs.: um sinal de pavio pode ser INVALIDADO depois (quando o par finalmente toma o proprio nivel) e some do grafico. A nota do setup ja congelada nao volta atras.")
+//#endregion
+
+
+//#region[Constants and Helpers]
+noColor            = color.new(color.white, 100)
+wmBgColor          = color.new(color.black, 100)
+MAX_SWING_HISTORY  = 50
+MAX_TRACKED_SETUPS = 50
+NY_TZ              = "America/New_York"
+// Recuo do label de liquidez em relação à ponta da linha, em barras. Tira o texto de cima
+// da vela que varreu o nível e o joga para o trecho vazio da linha (técnica do PO3).
+SWEEP_LABEL_BACK   = 2
+
+volSma = ta.sma(volume, 20)
+
+// Delta aproximado do candle: soma o volume das velas de um timeframe MENOR que fecharam em
+// alta e o das que fecharam em baixa, e devolve o saldo dividido pelo volume total (+1 = tudo
+// comprador, -1 = tudo vendedor).
+// O TF menor sai do input "Delta: TF intrabar". No Auto ele é 1/6 do TF do gráfico e NUNCA
+// desce abaixo de 1 minuto, porque dado de segundos depende do plano do TradingView — assim o
+// indicador não quebra em conta nenhuma. Quem tem segundos troca o input para 10S/15S e ganha
+// um delta bem mais fino.
+// Sem dado intrabar (plano sem segundos, histórico antigo, ativo sem volume) os arrays voltam
+// vazios e o resultado é `na` — aí o critério sai da conta da nota em vez de contar como falha.
+dlt_auto = int(math.max(60, timeframe.in_seconds() / 6))
+dlt_tf = switch deltaTfStr
+    "Auto" => dlt_auto < 86400 ? str.tostring(int(dlt_auto / 60)) : "1D"
+    "1m"   => "1"
+    "5m"   => "5"
+    =>        deltaTfStr
+[dlt_upArr, dlt_dnArr] = request.security_lower_tf(syminfo.tickerid, dlt_tf, [close > open ? volume : 0.0, close < open ? volume : 0.0])
+float dlt_up  = dlt_upArr.size() > 0 ? dlt_upArr.sum() : na
+float dlt_dn  = dlt_dnArr.size() > 0 ? dlt_dnArr.sum() : na
+float dlt_tot = na(dlt_up) ? na : dlt_up + dlt_dn
+float deltaRatio = na(dlt_tot) or dlt_tot <= 0 ? na : (dlt_up - dlt_dn) / dlt_tot
+
+// O candle de confirmação do IFVG é sempre o ANTERIOR (o gatilho usa close[1]), então é o delta
+// dele que interessa. Fica guardado aqui fora porque função Pine não pode usar o histórico de
+// uma variável global.
+float deltaRatioPrev = deltaRatio[1]
+
+// Duração de uma barra do gráfico em milissegundos. Com xloc.bar_time é assim que se anda
+// N barras para a direita (projeção do desenho do FVG HTF) — técnica do FADI.
+htfFvgMs = timeframe.in_seconds() * 1000
+
+// Transparência do preenchimento da zona de FVG HTF. Fixa, sem input.
+HTF_FVG_BG = 90
+
+// Folga que a linha do CE deixa antes da ponta direita da zona, para não passar por baixo do
+// label (que fica ancorado nessa ponta). Em barras: a projeção inteira, com um mínimo de 3.
+htfFvgCeGap = htfFvgMs * int(math.max(htfFvgExt + 1, 3))
+
+// Escala vertical para o anti-sobreposição dos labels de liquidez. Precisa ser calculado
+// no escopo global (ta.* não pode ficar dentro de função chamada condicionalmente).
+sweepAtr = ta.atr(14)
+
+sweepLineStyle = switch sweepStyleStr
+    "Dotted" => line.style_dotted
+    "Dashed" => line.style_dashed
+    "Solid"  => line.style_solid
+
+rrLineStyle = switch rrStyle
+    "Dotted" => line.style_dotted
+    "Dashed" => line.style_dashed
+    "Solid"  => line.style_solid
+
+sweepLabelSize = switch sweepLabelSizeStr
+    "Tiny"   => size.tiny
+    "Small"  => size.small
+    "Normal" => size.normal
+    "Large"  => size.large
+
+textSize = switch textSizeStr
+    "Tiny"   => size.tiny
+    "Small"  => size.small
+    "Normal" => size.normal
+    "Large"  => size.large
+
+smt_lsL = switch smt_ls
+    "Solid"  => line.style_solid
+    "Dotted" => line.style_dotted
+    => line.style_dashed
+
+smt_lzL = switch smt_lz
+    "Auto"   => size.auto
+    "Tiny"   => size.tiny
+    "Small"  => size.small
+    "Normal" => size.normal
+    "Large"  => size.large
+    "Huge"   => size.huge
+    => size.small
+
+// Apelidos que o motor de SMT copiado do PO3 usa internamente.
+smt_n    = bar_index
+smt_W100 = noColor
+
+tableTextSize = switch tableTextSizeStr
+    "Tiny"   => size.tiny
+    "Small"  => size.small
+    "Normal" => size.normal
+    "Large"  => size.large
+
+tablePosition = switch tablePositionStr
+    "Top Right"    => position.top_right
+    "Top Left"     => position.top_left
+    "Bottom Right" => position.bottom_right
+    "Bottom Left"  => position.bottom_left
+    "Middle Right" => position.middle_right
+
+wmSize1 = switch wmSize1Str
+    "Tiny"   => size.tiny
+    "Small"  => size.small
+    "Normal" => size.normal
+    "Large"  => size.large
+    "Huge"   => size.huge
+
+wmSize3 = switch wmSize3Str
+    "Tiny"   => size.tiny
+    "Small"  => size.small
+    "Normal" => size.normal
+    "Large"  => size.large
+    "Huge"   => size.huge
+
+// "60" -> "1H", "240" -> "4H", "15" -> "15m", "1D"/"1W"/"1M" ficam como estão.
+fmtTF(string tf) =>
+    float n = str.tonumber(tf)
+    string r = na(n) ? tf : (n % 60 == 0 ? str.tostring(n / 60) + "H" : tf + "m")
+    r
+
+bool inSession1 = session1Enable and not na(time(timeframe.period, session1Time, NY_TZ))
+bool inSession2 = session2Enable and not na(time(timeframe.period, session2Time, NY_TZ))
+bool inSession3 = session3Enable and not na(time(timeframe.period, session3Time, NY_TZ))
+bool inAlertSession = inSession1 or inSession2 or inSession3
+//#endregion
+
+
+//#region[Types]
+type SwingFVG
+    int    fvgBar1
+    int    fvgBar3
+    float  fvgTop
+    float  fvgBottom
+    int    swingBar
+    float  swingPrice
+    box    fvgBox
+    bool   ifvgConfirmed = false
+    bool   swept = false
+
+type Trade
+    bool   bullish
+    box    fvgBox
+    line   entryLine
+    label  entryLabel
+    int    entryBar
+    float  entryPrice
+    line   slLine
+    label  slLabel
+    float  slPrice
+    line   beLine
+    label  beLabel
+    float  bePrice
+    float  validPrice
+    bool   validReached = false
+    array<line>  rrLines  = na
+    array<label> rrLabels = na
+    bool   resolved = false
+    bool   sweptHTF = false
+    bool   volSpike = false
+    bool   smtOk    = false
+    bool   htfFvgOk = false
+    bool   clearTgt = false
+    bool   deltaImb = false
+    float  deltaVal = na
+    float  tgtPrice = na
+    int    swingBar = na    // swing de origem do setup - janela do SMT tardio
+    bool   stopped  = false // bateu no stop: vira "Stop" no rodape e para de ser reavaliado
+
+// Zona de FVG do timeframe maior. Geometria do FADI, sem contorno: as duas linhas de borda
+// existem só para segurar o linefill (são 100% transparentes) e cada uma nasce na barra que
+// criou aquele nível, o que deixa a ponta esquerda do preenchimento escalonada. Visível
+// mesmo: o preenchimento, a CE pontilhada no meio e o label por dentro da ponta direita.
+type HtfFVG
+    line     lnA        // borda vinda do candle ANTIGO (origem do gap) — invisível
+    line     lnB        // borda vinda do candle NOVO — invisível
+    line     lnCe       // consequent encroachment (meio do gap)
+    linefill fill
+    label    lbl
+    float    top
+    float    bottom
+    float    mid
+    bool     bullish
+    bool     filled = false
+
+type SwingPoint
+    float y
+    int   t
+
+type SwingSet
+    SwingPoint[] points
+
+// Nível de referência nomeável (PDH/PDL/PWH/PWL). `used` garante que cada nível batize
+// no máximo UMA varrida por período — reaberto quando vira o dia/semana.
+type LiqLevel
+    float  price
+    string name
+    bool   used = false
+
+// SMT de pavios adjacentes: linhas/labels desenhados por direção (up/down) e, junto de
+// cada um, o nível do ativo correlacionado que invalida aquele sinal. Motor do PO3.
+type SmtArrHD
+    array<line>  ul
+    array<label> ub
+    array<float> ur
+    array<line>  dl
+    array<label> db
+    array<float> dr
+
+// FVG acompanhado pelo SMT de FVG — um por lado (alta/baixa) e por ativo.
+type SmtFVG
+    float top
+    float bot
+    int   fbar
+    bool  mit
+    box   bx
+
+// Registro de um label de liquidez já finalizado (o swing dele acabou, então ele não se
+// move mais). Serve para o anti-sobreposição saber onde os vizinhos estão.
+type SweepTag
+    label  lbl
+    int    bar
+    float  price
+    bool   named
+    bool   shown = true
+//#endregion
+
+
+//#region[State]
+var Trade[] setupRecords = array.new<Trade>()
+
+// A TABELA le daqui, e nao do setupRecords: um setup que bate no stop e removido do
+// setupRecords para sumir do grafico, e sem isso a tabela voltaria a descrever um setup
+// ANTIGO (ou a ficar vazia). Array de 1 porque funcao Pine nao escreve em global escalar.
+var Trade[] lastSetup = array.new<Trade>()
+
+// Os quatro níveis ficam em variáveis nomeadas porque o Pine não aceita atribuir campo
+// direto no retorno de array.get() (CE10137). Os arrays guardam referências aos MESMOS
+// objetos, então mexer na variável nomeada é mexer no que o array enxerga.
+// Ordem do array = ordem de prioridade: o semanal ganha do diário quando os dois batem
+// no mesmo preço varrido.
+var LiqLevel liqPWH = LiqLevel.new(na, "PWH")
+var LiqLevel liqPDH = LiqLevel.new(na, "PDH")
+var LiqLevel liqPWL = LiqLevel.new(na, "PWL")
+var LiqLevel liqPDL = LiqLevel.new(na, "PDL")
+var LiqLevel[] liqHighs = array.from(liqPWH, liqPDH)
+var LiqLevel[] liqLows  = array.from(liqPWL, liqPDL)
+
+var SweepTag[] sweepTags = array.new<SweepTag>()
+
+// Swings do timeframe maior ainda NÃO varridos — é deles que sai tanto o sinal de sweep quanto
+// a liquidez alvo do critério Clear Targets. Ficam declarados aqui, e não junto do detector de
+// sweep, porque as funções de confluência precisam enxergá-los (no Pine, função só usa variável
+// global declarada ANTES dela).
+var SwingSet stHigh = SwingSet.new(array.new<SwingPoint>())
+var SwingSet stLow  = SwingSet.new(array.new<SwingPoint>())
+
+// HTF FVG
+var HtfFVG[] htfFvgBull      = array.new<HtfFVG>()
+var HtfFVG[] htfFvgBear      = array.new<HtfFVG>()
+var int      htfFvgTouchBull = na   // último bar em que o preço esteve dentro de um FVG HTF de alta
+var int      htfFvgTouchBear = na   // último bar em que o preço esteve dentro de um FVG HTF de baixa
+
+// SMT (motor do PO3)
+// Barra do pivô do último SMT FORTE por direção: 0 = alta (fundo), 1 = baixa (topo).
+// É array e não duas variáveis soltas porque função Pine não pode escrever em variável
+// global escalar — mesma solução do cf_smt no PO3. Alimenta a coluna SMT da tabela.
+var int[] smtRefBars = array.from(int(na), int(na))
+
+// Mesma coisa para o detector de PAVIO ADJACENTE, que so entra na conta quando o input
+// smtCountWicks esta ligado. Separado do smtRefBars para o pivo continuar valendo sozinho
+// quando o toggle estiver desligado.
+var int[] smtWickBars = array.from(int(na), int(na))
+
+// SMT de pivô: as três escalas compartilham o mesmo limite de sinais na tela.
+var line[]  smt_pvLn = array.new_line()
+var label[] smt_pvLb = array.new_label()
+
+// Níveis que já geraram SMT de pivô, por ativo. Sem isso, as três escalas marcariam o
+// mesmo topo três vezes.
+var float[] smt_dedH1 = array.new_float()
+var float[] smt_dedL1 = array.new_float()
+var float[] smt_dedH2 = array.new_float()
+var float[] smt_dedL2 = array.new_float()
+
+// SMT de FVG: caixa + linha + label de cada sinal.
+var box[]   smt_fsBx = array.new_box()
+var line[]  smt_fsLn = array.new_line()
+var label[] smt_fsLb = array.new_label()
+//#endregion
+
+
+//#region[Functions and Methods - Confluência e Nota]
+// Liquidez ALVO do setup: o nível ainda não varrido mais próximo na direção do trade.
+// Candidatos: os swings do detector de sweep (stHigh/stLow — o findSweep tira dali tudo que
+// já foi varrido) e os níveis nomeados PDH/PWH (compra) ou PDL/PWL (venda).
+conf_FindTarget(bool bullish, float entry) =>
+    float best = na
+    SwingPoint[] pts = bullish ? stHigh.points : stLow.points
+    if pts.size() > 0
+        for i = 0 to pts.size() - 1
+            SwingPoint p = pts.get(i)
+            float y = p.y
+            if (bullish ? y > entry : y < entry) and (na(best) or (bullish ? y < best : y > best))
+                best := y
+    LiqLevel[] lv = bullish ? liqHighs : liqLows
+    if lv.size() > 0
+        for i = 0 to lv.size() - 1
+            LiqLevel lq = lv.get(i)
+            float y2 = lq.price
+            if not na(y2) and (bullish ? y2 > entry : y2 < entry) and (na(best) or (bullish ? y2 < best : y2 > best))
+                best := y2
+    best
+
+// Caminho limpo: nenhum FVG do timeframe maior CONTRÁRIO ao setup (e ainda válido) entre a
+// entrada e o alvo. Um FVG de baixa no meio do caminho de uma compra é obstáculo — é ali que
+// o preço tende a reagir antes de entregar a liquidez.
+conf_PathClear(bool bullish, float entry, float tgt) =>
+    bool clear = true
+    if not na(tgt)
+        HtfFVG[] opp = bullish ? htfFvgBear : htfFvgBull
+        float lo = math.min(entry, tgt)
+        float hi = math.max(entry, tgt)
+        if opp.size() > 0
+            for i = 0 to opp.size() - 1
+                HtfFVG f = opp.get(i)
+                if not f.filled and f.bottom <= hi and f.top >= lo
+                    clear := false
+    clear
+
+// Barra do ultimo SMT que CONTA como confluencia, por direcao (o mais recente entre os
+// detectores habilitados). O pivo FORTE conta sempre; o pavio adjacente so com o input
+// smtCountWicks ligado. SMT de FVG e divergencia FRACA nunca entram.
+conf_SmtRefBar(bool bullish) =>
+    int idx  = bullish ? 0 : 1
+    int rp   = array.get(smtRefBars, idx)
+    int rw   = array.get(smtWickBars, idx)
+    int best = rp
+    if smtCountWicks and not na(rw)
+        if na(best)
+            best := rw
+        else if rw > best
+            best := rw
+    best
+
+// Liquidity Sweep pelo PRECO - segundo caminho do criterio (o primeiro e o de TEMPO, o
+// e.swept: "o swing de origem varreu"). Varre os labels de varrida ja finalizados a partir
+// do swing e aceita se algum nivel varrido cair na altura da zona do IFVG, com a folga do
+// input liqAtTol. Pega o caso de a varrida ter acontecido ANTES do swing do setup.
+conf_AtSweptLiq(int fromBar, float zTop, float zBot, float tol) =>
+    bool hit = false
+    if sweepTags.size() > 0
+        for i = 0 to sweepTags.size() - 1
+            SweepTag sg = sweepTags.get(i)
+            if sg.bar >= fromBar and sg.price <= zTop + tol and sg.price >= zBot - tol
+                hit := true
+    hit
+
+// HTF PDA Delivery pela GEOMETRIA - segundo caminho do criterio (o primeiro e o TOQUE,
+// htfFvgTouchBull/Bear dentro da janela de 3 barras). Aceita se a zona do IFVG SOBREPOE um
+// FVG do timeframe maior da MESMA direcao e ainda valido: pega o IFVG que nasce colado na
+// borda da zona, em que o toque nao caiu na janela. FVG contrario continua nao contando.
+conf_InHtfFvg(bool bullish, float zTop, float zBot) =>
+    bool hit = false
+    HtfFVG[] same = bullish ? htfFvgBull : htfFvgBear
+    if same.size() > 0
+        for i = 0 to same.size() - 1
+            HtfFVG f = same.get(i)
+            if not f.filled and f.bottom <= zTop and f.top >= zBot
+                hit := true
+    hit
+
+// Nota do setup — CONTAGEM SIMPLES: cada critério vale 1 ponto e a nota sai da fração de
+// critérios ATENDIDOS sobre os APLICÁVEIS. Um módulo desligado (SMT / HTF FVG) ou sem dado
+// (delta sem intrabar) sai da conta em vez de puxar a nota para baixo.
+// O critério IFVG entra sempre atendido: o setup só existe porque houve um IFVG confirmado.
+conf_Score(Trade tr) =>
+    int hits  = 1
+    int total = 1
+    hits  += tr.sweptHTF ? 1 : 0
+    total += 1
+    hits  += tr.clearTgt ? 1 : 0
+    total += 1
+    hits  += tr.volSpike ? 1 : 0
+    total += 1
+    if showSMT
+        hits  += tr.smtOk ? 1 : 0
+        total += 1
+    if showHtfFvg
+        hits  += tr.htfFvgOk ? 1 : 0
+        total += 1
+    if not na(tr.deltaVal)
+        hits  += tr.deltaImb ? 1 : 0
+        total += 1
+    [hits, total]
+
+// Letra e cor da nota. 100% = A+ | >=80% = A | >=60% = B | >=40% = C | resto = D.
+conf_Grade(int hits, int total) =>
+    float pct = total > 0 ? hits / float(total) : 0.0
+    string g = pct >= 1 ? "A+" : pct >= 0.8 ? "A" : pct >= 0.6 ? "B" : pct >= 0.4 ? "C" : "D"
+    color  c = pct >= 1 ? #00E5B0 : pct >= 0.8 ? color.lime : pct >= 0.6 ? color.yellow : pct >= 0.4 ? color.orange : color.red
+    [g, c]
+
+// Marca da coluna Status. `applicable = false` = critério fora da conta (módulo desligado ou
+// sem dado): vira traço cinza, nem soma nem subtrai na nota.
+conf_CellTxt(bool applicable, bool ok) =>
+    not applicable ? "-" : tableMarkStyle == "Emoji" ? (ok ? "✅" : "❌") : (ok ? "V" : "X")
+
+conf_CellCol(bool applicable, bool ok) =>
+    not applicable ? color.gray : (ok ? colorMarkValid : colorMarkInvalid)
+
+// Uma linha do checklist: nome à esquerda, marca à direita.
+conf_Row(t, r, name, applicable, ok, tip) =>
+    table.cell(t, 0, r, name, text_color = color.white, text_size = tableTextSize, text_halign = text.align_left, tooltip = tip)
+    table.cell(t, 1, r, conf_CellTxt(applicable, ok), text_color = conf_CellCol(applicable, ok), text_size = tableTextSize)
+//#endregion
+
+
+//#region[Functions and Methods - IFVG]
+// Guarda um label de liquidez já finalizado no registro, para o anti-sobreposição.
+sweep_Archive(label lb, int b, float p, bool named, bool shown) =>
+    if not na(lb)
+        sweepTags.push(SweepTag.new(lb, b, p, named, shown))
+        while sweepTags.size() > 60
+            sweepTags.shift()
+
+// Chamado toda vez que o label ATIVO é criado ou reposicionado. Apaga o texto dos vizinhos
+// antigos que ficariam colados nele e devolve se o ativo pode mostrar o próprio texto.
+// A linha de liquidez nunca é removida — só o texto some, para o gráfico não virar sopa.
+sweep_Declutter(int b, float p, bool named) =>
+    bool show = true
+    if declutterSweep and sweepTags.size() > 0
+        float vGap = nz(sweepAtr) * sweepGapAtr
+        for t in sweepTags
+            if t.shown and math.abs(t.bar - b) <= sweepGapBars and math.abs(t.price - p) <= vGap
+                if t.named and not named
+                    // Nível nomeado tem preferência: quem cede é o label genérico novo.
+                    show := false
+                else
+                    label.set_text(t.lbl, "")
+                    t.shown := false
+    show
+
+ict_PushCandidate(array<SwingFVG> arr, int fvgBar1, int fvgBar3, float top, float bottom, int oBar, float oPrice) =>
+    SwingFVG sw = SwingFVG.new(fvgBar1, fvgBar3, top, bottom, oBar, oPrice)
+    arr.push(sw)
+    if arr.size() > MAX_TRACKED_SETUPS
+        arr.shift()
+    sw
+
+ict_ScanExtreme(bool ifvgBullish, int fromBar) =>
+    int   span      = bar_index - fromBar
+    float bestPrice = na
+    int   bestBar   = na
+    for j = 0 to span
+        float val = ifvgBullish ? low[span - j] : high[span - j]
+        if na(bestPrice) or (ifvgBullish ? val < bestPrice : val > bestPrice)
+            bestPrice := val
+            bestBar   := fromBar + j
+    [bestBar, bestPrice]
+
+ict_ParseFloats(string src) =>
+    var out = array.new<float>()
+    array.clear(out)
+    for part in str.split(str.replace_all(src, " ", ""), ",")
+        v = str.tonumber(part)
+        if not na(v)
+            out.push(v)
+    out
+
+ict_CreateRR(Trade tr, int x1, int x2) =>
+    if showRR and not na(tr.slPrice)
+        ratios = ict_ParseFloats(rrInput)
+        if ratios.size() > 0
+            float riskRange = math.abs(tr.entryPrice - tr.slPrice)
+            lns = array.new<line>()
+            lbs = array.new<label>()
+            for r in ratios
+                float rrPrice = tr.bullish ? tr.entryPrice + riskRange * r : tr.entryPrice - riskRange * r
+                lns.push(line.new(x1, rrPrice, x2, rrPrice, color = color.new(rrColor, 45), style = rrLineStyle, width = rrWidth))
+                lbs.push(label.new(x2, rrPrice, str.tostring(r) + "R", xloc = xloc.bar_index, style = label.style_label_left, color = na, textcolor = color.new(rrColor, 15), size = textSize, text_font_family = font.family_monospace))
+            tr.rrLines  := lns
+            tr.rrLabels := lbs
+
+ict_DeleteRR(Trade tr) =>
+    if not na(tr.rrLines)
+        for ln in tr.rrLines
+            line.delete(ln)
+    if not na(tr.rrLabels)
+        for lb in tr.rrLabels
+            label.delete(lb)
+    tr.rrLines  := na
+    tr.rrLabels := na
+
+// liqLvls = níveis nomeáveis do lado que está sendo varrido, em ordem de prioridade:
+// [PWH, PDH] para varrida de topo, [PWL, PDL] para varrida de fundo.
+ict_TrackLine(bool isLow, array<SwingFVG> validArr, bool sweepValid, float sweepPrice, int sweepTime, color sweepLineColor, array<LiqLevel> liqLvls) =>
+    var float originPrice  = na
+    var int   originBar    = na
+    var bool  frozen       = false
+    var float frozenPrice  = na
+    var int   freezeBar    = na
+    var SwingFVG liveEntry    = na
+    var int      clusterLast1 = na
+    var line     sweepLn       = na
+    var label    sweepLbl      = na
+    var float    sweepLnPrice  = na
+    var int      sweepLnTime   = na
+    var int      sweepHitTime  = na
+    var int      sweepHitBar   = na
+    var string   sweepLnTxt    = na
+    var bool     sweepNamed    = false
+    var bool     sweepShown    = true
+
+    bool  pivotOrigin = isLow ? ta.lowestbars(3) == -1  : ta.highestbars(3) == -1
+    bool  pivotOpp    = isLow ? ta.highestbars(3) == -1 : ta.lowestbars(3) == -1
+    float originSrc   = isLow ? low[1]  : high[1]
+    float oppSrc      = isLow ? high[1] : low[1]
+    bool  fvgHere     = isLow ? low[1] > high[3] : high[1] < low[3]
+    float fvgTop      = isLow ? low[1] : low[3]
+    float fvgBottom   = isLow ? high[3] : high[1]
+
+    if pivotOrigin
+        originPrice  := originSrc
+        originBar    := bar_index - 1
+        frozen       := false
+        frozenPrice  := na
+        freezeBar    := na
+        liveEntry    := na
+        clusterLast1 := na
+        // O label do swing que acabou não se move mais: vai para o registro, onde passa a
+        // contar como vizinho para o anti-sobreposição dos próximos.
+        sweep_Archive(sweepLbl, sweepHitBar, sweepLnPrice, sweepNamed, sweepShown)
+        sweepLn      := na
+        sweepLbl     := na
+        sweepLnPrice := na
+        sweepLnTime  := na
+        sweepHitTime := na
+        sweepHitBar  := na
+        sweepLnTxt   := na
+        sweepNamed   := false
+        sweepShown   := true
+
+    if not na(originBar)
+        if frozen
+            bool broken = isLow ? oppSrc > frozenPrice : oppSrc < frozenPrice
+            if broken
+                frozen := false
+
+        bool checkFvg = (not frozen or bar_index == freezeBar + 1) and bar_index - 3 >= originBar - 1 and fvgHere
+
+        if checkFvg
+            int fvgBar1 = bar_index - 1
+            int fvgBar3 = bar_index - 3
+
+            if not na(liveEntry) and not liveEntry.ifvgConfirmed and validArr.indexof(liveEntry) < 0
+                liveEntry    := na
+                clusterLast1 := na
+
+            if na(liveEntry)
+                liveEntry    := ict_PushCandidate(validArr, fvgBar1, fvgBar3, fvgTop, fvgBottom, originBar, originPrice)
+                clusterLast1 := fvgBar1
+            else if not liveEntry.ifvgConfirmed
+                if ifvgMode == "Series" and fvgBar1 == clusterLast1 + 1
+                    liveEntry.fvgTop    := math.max(liveEntry.fvgTop, fvgTop)
+                    liveEntry.fvgBottom := math.min(liveEntry.fvgBottom, fvgBottom)
+                    liveEntry.fvgBar1   := fvgBar1
+                    clusterLast1 := fvgBar1
+                else
+                    bool better = isLow ? fvgTop > liveEntry.fvgTop : fvgBottom < liveEntry.fvgBottom
+                    if better
+                        int oldIdx = validArr.indexof(liveEntry)
+                        if oldIdx >= 0
+                            validArr.remove(oldIdx)
+                        liveEntry    := ict_PushCandidate(validArr, fvgBar1, fvgBar3, fvgTop, fvgBottom, originBar, originPrice)
+                        clusterLast1 := fvgBar1
+
+        // A linha de liquidez vai do pivô que criou o nível (sweepLnTime) até a barra que o
+        // varreu (sweepHitTime) e PARA ali — não acompanha mais o preço.
+        //
+        // O label é ancorado por PIXEL a partir de uma coordenada fixa (barra + preço), nunca
+        // por deslocamento de preço — assim ele fica colado na linha e não escorrega no zoom.
+        if sweepValid
+            bool betterSweep = na(sweepLnPrice) or (isLow ? sweepPrice > sweepLnPrice : sweepPrice < sweepLnPrice)
+            if betterSweep
+                sweepLnPrice := sweepPrice
+                sweepLnTime  := sweepTime
+                sweepHitTime := time
+                sweepHitBar  := bar_index
+                sweepLnTxt   := sweepLabelText
+                sweepNamed   := false
+                if namePDLevels
+                    float pdTol = syminfo.mintick * pdTolTicks
+                    for lv in liqLvls
+                        if not lv.used and not na(lv.price) and math.abs(sweepPrice - lv.price) <= pdTol
+                            sweepLnTxt := lv.name
+                            sweepNamed := true
+                            lv.used    := true
+                            break
+                sweepShown := sweep_Declutter(sweepHitBar, sweepLnPrice, sweepNamed)
+            // Ancoragem por CANTO, como o PO3 faz nos PDH/PDL e nas BSL/SSL: o canto inferior
+            // direito no ponto (label_lower_right) joga o texto para CIMA e para a ESQUERDA;
+            // o canto superior direito (label_upper_right) joga para BAIXO e para a esquerda.
+            // Assim o texto nunca invade o espaço à direita da ponta da linha, que é onde o
+            // preço está — diferente dos estilos com seta, que centram o texto na âncora.
+            // Aqui isLow = true significa varrida de TOPO (o pivô de origem é um fundo).
+            int sweepLblBar = sweepHitBar - SWEEP_LABEL_BACK
+            if na(sweepLn)
+                sweepLn  := line.new(sweepLnTime, sweepLnPrice, sweepHitTime, sweepLnPrice, xloc = xloc.bar_time, color = sweepLineColor, style = sweepLineStyle, width = sweepWidth)
+                sweepLbl := label.new(sweepLblBar, sweepLnPrice, sweepShown ? sweepLnTxt : "", xloc = xloc.bar_index, style = isLow ? label.style_label_lower_right : label.style_label_upper_right, color = na, textcolor = sweepLineColor, size = sweepLabelSize, text_font_family = font.family_monospace)
+            else
+                line.set_xy1(sweepLn, sweepLnTime, sweepLnPrice)
+                line.set_xy2(sweepLn, sweepHitTime, sweepLnPrice)
+                label.set_xy(sweepLbl, sweepLblBar, sweepLnPrice)
+                label.set_text(sweepLbl, sweepShown ? sweepLnTxt : "")
+
+        bool swingSwept = not na(sweepLn)
+
+        if not na(liveEntry)
+            liveEntry.swept := swingSwept
+
+        if not frozen and pivotOpp
+            frozen      := true
+            frozenPrice := oppSrc
+            freezeBar   := bar_index
+
+// SMT TARDIO - corrige o congelamento do tr.smtOk.
+// O SMT de pivo so e DETECTADO smt_L1/L2/L3 barras DEPOIS do pivo (e o que o ta.pivothigh
+// exige para confirmar), mas o tr.smtOk e avaliado UMA vez, no candle em que o IFVG
+// confirma. Quando o IFVG confirma dentro dessa janela - o caso normal - o sinal ainda nao
+// existe e o X ficava gravado para sempre, mesmo com o label ja desenhado no topo.
+// Esta funcao roda a cada barra e vira o X em V quando aparece um pivo FORTE cujo PIVO caia
+// entre swingBar - smt_L1 e a barra de entrada. SMT posterior ao setup nao conta.
+// NAO pode viver dentro do ict_ManageTrades: com "Congelar apos atingir criterio" o setup
+// sai do array de trades em 1-2 barras e nunca mais passaria por la.
+ict_SmtLate(array<Trade> arr) =>
+    if showSMT and arr.size() > 0
+        for i = 0 to arr.size() - 1
+            Trade t = arr.get(i)
+            if not na(t)
+                // Campos copiados para locais: `and` nao garante curto-circuito no Pine.
+                bool pend = not t.smtOk
+                bool live = not t.stopped
+                bool hasS = not na(t.swingBar)
+                if pend and live and hasS
+                    int refBar = conf_SmtRefBar(t.bullish)
+                    if not na(refBar) and refBar >= t.swingBar - smt_L1 and refBar <= t.entryBar
+                        t.smtOk := true
+    true
+
+ict_CheckIFVG(array<SwingFVG> arr, array<Trade> trades, bool sourceBearish, int graceCandles) =>
+    int n = arr.size()
+    if n > 0
+        for i = n - 1 to 0
+            SwingFVG e = arr.get(i)
+            if not e.ifvgConfirmed
+                bool trigger = sourceBearish ? close[1] > e.fvgTop : close[1] < e.fvgBottom
+                if trigger
+                    e.ifvgConfirmed := true
+                    bool  ifvgBullish = sourceBearish
+                    float lvl         = close[1]
+                    bool  beBreached  = requireBEIntact and (ifvgBullish ? lvl >= e.swingPrice : lvl <= e.swingPrice)
+                    bool  passSweepFilter   = not onlyShowSweptIFVG or e.swept
+
+                    if not beBreached and passSweepFilter
+                        color lc       = ifvgBullish ? colorIFVGBull : colorIFVGBear
+                        color boxColor = ifvgBullish ? colorIFVGBullBox : colorIFVGBearBox
+                        e.fvgBox := box.new(e.fvgBar3, e.fvgTop, bar_index, e.fvgBottom, border_color = noColor, bgcolor = boxColor)
+                        int    x1  = bar_index - 1
+                        int    x2  = x1 + 9
+                        bool   volAbove = volume[1] > volSma[1]
+                        string txt = ifvgLineText + (ifvgBullish ? "+" : "-") + (volAbove ? " ● " : "")
+                        line  entryLine  = line.new(x1, lvl, x2, lvl, color = lc)
+                        label entryLabel = label.new(x2, lvl, txt, style = label.style_label_left, color = noColor, textcolor = lc, size = textSize, text_font_family = font.family_monospace)
+
+                        Trade tr = Trade.new(ifvgBullish, e.fvgBox, entryLine, entryLabel, x1, lvl)
+                        tr.swingBar := e.swingBar
+                        // Liquidity Sweep tem DOIS caminhos: o de TEMPO (o swing de origem varreu)
+                        // e o de PRECO (a zona do IFVG nasceu na altura de um nivel ja varrido).
+                        tr.sweptHTF := e.swept or conf_AtSweptLiq(e.swingBar, e.fvgTop, e.fvgBottom, liqAtTol * sweepAtr)
+                        tr.volSpike := volAbove
+
+                        // Confluências extras, avaliadas no momento da confirmação do IFVG e congeladas no setup:
+                        // SMT     -> houve divergência SMT na direção do setup a partir do swing de origem.
+                        // HTF FVG -> o preço interagiu com um FVG do timeframe maior durante a formação do setup.
+                        int smtRefBar = conf_SmtRefBar(ifvgBullish)
+                        tr.smtOk := showSMT and not na(smtRefBar) and smtRefBar >= e.swingBar - smt_L1
+                        int htfFvgRefBar = ifvgBullish ? htfFvgTouchBull : htfFvgTouchBear
+                        // Tambem dois caminhos: o TOQUE (o preco esteve dentro do FVG HTF durante a
+                        // formacao) e a GEOMETRIA (a zona do IFVG sobrepoe um FVG HTF da mesma
+                        // direcao ainda valido) - pega o IFVG que nasce colado na borda.
+                        tr.htfFvgOk := showHtfFvg and ((not na(htfFvgRefBar) and htfFvgRefBar >= e.swingBar - 3) or conf_InHtfFvg(ifvgBullish, e.fvgTop, e.fvgBottom))
+
+                        // Nível de invalidação (fundo/topo do range do IFVG). É SEMPRE calculado,
+                        // independente do toggle "Stoploss" (showSL), pois o ict_ManageTrades depende
+                        // dele para apagar o setup quando esse nível é violado.
+                        [bestBar, bestPrice] = ict_ScanExtreme(ifvgBullish, e.fvgBar1)
+                        int   offset        = bar_index - bestBar
+                        bool  candleBullish = close[offset] > open[offset]
+                        float bodyPrice     = (ifvgBullish == candleBullish) ? open[offset] : close[offset]
+                        float slPrice = switch slPlacement
+                            "Wick" => bestPrice
+                            "Body" => bodyPrice
+                            "IFVG" => ifvgBullish ? e.fvgBottom : e.fvgTop
+                        tr.slPrice := slPrice
+
+                        // Clear Targets -> existe liquidez oposta ainda não varrida, a pelo menos
+                        // targetMinR de distância e sem FVG HTF contrário no caminho.
+                        // Delta Imbalance -> o candle de confirmação entregou volume desequilibrado
+                        // a favor da direção do setup.
+                        float tgtP  = conf_FindTarget(ifvgBullish, lvl)
+                        float riskT = math.abs(lvl - slPrice)
+                        tr.tgtPrice := tgtP
+                        tr.clearTgt := not na(tgtP) and (targetMinR <= 0 or math.abs(tgtP - lvl) >= riskT * targetMinR) and conf_PathClear(ifvgBullish, lvl, tgtP)
+                        tr.deltaVal := deltaRatioPrev
+                        tr.deltaImb := not na(deltaRatioPrev) and (ifvgBullish ? deltaRatioPrev >= deltaMinRatio : deltaRatioPrev <= -deltaMinRatio)
+
+                        if showSL
+                            tr.slLine  := line.new(bestBar, slPrice, bar_index + 3, slPrice, color = color.new(colorSL, 35), style = line.style_dotted)
+                            tr.slLabel := label.new(bar_index + 3, slPrice, "SL", style = label.style_label_left, color = noColor, textcolor = colorSL, size = size.small, text_font_family = font.family_monospace)
+                            ict_CreateRR(tr, x1, x2)
+
+                        // Nível de validade (B.E ou 1R). É SEMPRE calculado, independente do toggle
+                        // "Break Even" (showBE), pois o ict_ManageTrades depende dele para decidir
+                        // quando o setup vira "válido" e, dependendo de freezeAfterValid, se ele
+                        // deve ou não continuar sendo checado contra o SL depois disso.
+                        float riskRangeValid = math.abs(lvl - slPrice)
+                        float validPrice = switch validityCriteria
+                            "B.E" => e.swingPrice
+                            "1R"  => ifvgBullish ? lvl + riskRangeValid : lvl - riskRangeValid
+                        tr.validPrice := validPrice
+
+                        if showBE
+                            string validLabelTxt = validityCriteria == "1R" ? "1R" : "B.E"
+                            int    validLineX1   = validityCriteria == "1R" ? x1 : e.swingBar
+                            tr.bePrice := validPrice
+                            tr.beLine  := line.new(validLineX1, validPrice, x2, validPrice, color = color.new(colorBE, 35), style = line.style_dotted)
+                            tr.beLabel := label.new(x2, validPrice, validLabelTxt, style = label.style_label_left, color = noColor, textcolor = colorBE, size = size.small, text_font_family = font.family_monospace)
+
+                        trades.push(tr)
+                        setupRecords.push(tr)
+                        // Espelho de 1 posicao para a tabela - ver o comentario no [State].
+                        lastSetup.clear()
+                        lastSetup.push(tr)
+                        while setupHistory > 0 and setupRecords.size() > setupHistory
+                            Trade oldest = setupRecords.shift()
+                            int oldIdx = trades.indexof(oldest)
+                            if oldIdx >= 0
+                                trades.remove(oldIdx)
+                            box.delete(oldest.fvgBox)
+                            line.delete(oldest.entryLine)
+                            label.delete(oldest.entryLabel)
+                            line.delete(oldest.slLine)
+                            label.delete(oldest.slLabel)
+                            line.delete(oldest.beLine)
+                            label.delete(oldest.beLabel)
+                            ict_DeleteRR(oldest)
+
+                        if enableAlerts and inAlertSession
+                            [alHits, alTot] = conf_Score(tr)
+                            [alGrade, alGcol] = conf_Grade(alHits, alTot)
+                            string confTxt = " | Nota " + alGrade + " (" + str.tostring(alHits) + "/" + str.tostring(alTot) + ")" + (tr.sweptHTF ? " | Sweep" : "") + (tr.smtOk ? " | SMT" : "") + (tr.htfFvgOk ? " | HTF FVG" : "") + (tr.deltaImb ? " | Delta" : "") + (tr.clearTgt ? " | Alvo" : "") + (tr.volSpike ? " | Vol" : "")
+                            alert((ifvgBullish ? "Bullish" : "Bearish") + " IFVG confirmed on " + syminfo.ticker + confTxt, alert.freq_once_per_bar_close)
+                if not trigger and bar_index - e.fvgBar1 > graceCandles
+                    arr.remove(i)
+
+ict_ManageTrades(array<Trade> trades) =>
+    int n = trades.size()
+    if n > 0
+        for i = n - 1 to 0
+            Trade tr = trades.get(i)
+            if not tr.resolved
+                bool slHit    = tr.bullish ? (not na(tr.slPrice) and low <= tr.slPrice) : (not na(tr.slPrice) and high >= tr.slPrice)
+                bool validHit = tr.bullish ? (not na(tr.validPrice) and high >= tr.validPrice) : (not na(tr.validPrice) and low <= tr.validPrice)
+
+                // Se "Congelar após atingir critério" estiver ligado (freezeAfterValid), um setup que já
+                // atingiu o nível de validade (validReached) para de ser apagado por SL.
+                // Se estiver desligado, o SL continua valendo mesmo depois de validReached.
+                bool deleteOnSL = slHit and (not freezeAfterValid or not tr.validReached)
+
+                if deleteOnSL
+                    tr.resolved := true
+                    tr.stopped  := true
+                    line.delete(tr.slLine)
+                    label.delete(tr.slLabel)
+                    line.delete(tr.beLine)
+                    label.delete(tr.beLabel)
+                    ict_DeleteRR(tr)
+                    box.delete(tr.fvgBox)
+                    line.delete(tr.entryLine)
+                    label.delete(tr.entryLabel)
+                    int recIdx = setupRecords.indexof(tr)
+                    if recIdx >= 0
+                        setupRecords.remove(recIdx)
+                    trades.remove(i)
+                else if validHit and not tr.validReached
+                    tr.validReached := true
+                    box.set_border_color(tr.fvgBox, colorBE)
+                    line.set_color(tr.entryLine, colorBE)
+                    label.set_textcolor(tr.entryLabel, colorBE)
+                    label.set_color(tr.entryLabel, noColor)
+                    if freezeAfterValid
+                        tr.resolved := true
+                        trades.remove(i)
+                    // Se freezeAfterValid = false, o trade continua no array `trades`
+                    // (resolved = false) para seguir sendo monitorado contra o SL nos próximos bars.
+//#endregion
+
+
+//#region[Functions and Methods - Sweep Detector]
+// Apelido de timeframe do gráfico. O 2m não tem escala própria na tabela abaixo: é
+// tratado como se fosse o 3m (mesmo HTF). Sem isso ele cairia no ramo default e
+// puxaria o mensal.
+autoHTF() =>
+    string tfBase = timeframe.period == "2" ? "3" : timeframe.period
+    switch tfBase
+        "1"   => "15"
+        "3"   => "30"
+        "5"   => "60"
+        "15"  => "240"
+        "60"  => "1D"
+        "240" => "1W"
+        "1D"  => "1M"
+        =>      "1M"
+
+method addPoint(SwingSet this, float y, int t) =>
+    this.points.push(SwingPoint.new(y, t))
+    if this.points.size() > MAX_SWING_HISTORY
+        this.points.remove(0)
+
+method findSweep(SwingSet this, float testPrice, bool isHigh) =>
+    bool  found  = false
+    float foundY = na
+    int   foundT = na
+    if this.points.size() > 0
+        for i = this.points.size() - 1 to 0
+            pt = this.points.get(i)
+            bool isSwept = isHigh ? testPrice > pt.y : testPrice < pt.y
+            if isSwept
+                bool better = not found or (isHigh ? pt.y > foundY : pt.y < foundY)
+                if better
+                    foundY := pt.y
+                    foundT := pt.t
+                found := true
+                this.points.remove(i)
+    [found, foundY, foundT]
+//#endregion
+
+
+//#region[Functions and Methods - HTF FVG]
+// Ponta esquerda de cada borda, do jeito que o FADI faz (flo/fhi): procura, entre a barra
+// atual e o tempo do candle HTF de origem, a barra do GRÁFICO cujo pavio encostou exatamente
+// no nível — é ela que ancora a linha. Assim cada borda começa no candle que a criou, e não
+// as duas juntas na abertura do gap. `newest` escolhe a batida mais recente (borda antiga) ou
+// a mais antiga (borda nova) do intervalo; sem batida exata, cai no tempo padrão.
+htfFvg_Anchor(float p, int st, int dflt, bool useHigh, bool newest) =>
+    int loc = dflt
+    int n   = (time - st) / htfFvgMs
+    if n >= 0 and n < 5000
+        if newest
+            for i = 0 to n
+                if (useHigh ? high[i] : low[i]) == p
+                    loc := time[i]
+                    break
+        else
+            for i = n to 0
+                if (useHigh ? high[i] : low[i]) == p
+                    loc := time[i]
+                    break
+    loc
+
+htfFvg_Del(HtfFVG f) =>
+    line.delete(f.lnA)
+    line.delete(f.lnB)
+    line.delete(f.lnCe)
+    linefill.delete(f.fill)
+    label.delete(f.lbl)
+
+// Move a ponta direita da zona. A CE para antes (htfFvgCeGap) para não cruzar o label, e nunca
+// recua para trás da própria origem.
+htfFvg_SetRight(HtfFVG f, int x) =>
+    line.set_x2(f.lnA, x)
+    line.set_x2(f.lnB, x)
+    line.set_x2(f.lnCe, int(math.max(x - htfFvgCeGap, line.get_x1(f.lnCe))))
+    if not na(f.lbl)
+        label.set_x(f.lbl, x)
+
+// As linhas de borda continuam invisíveis (transparência 100) — só o que é visível troca de cor.
+htfFvg_SetColor(HtfFVG f, color c) =>
+    line.set_color(f.lnA, color.new(c, 100))
+    line.set_color(f.lnB, color.new(c, 100))
+    line.set_color(f.lnCe, color.new(c, 60))
+    if not na(f.fill)
+        linefill.set_color(f.fill, color.new(c, HTF_FVG_BG))
+    if not na(f.lbl)
+        label.set_textcolor(f.lbl, c)
+
+// Desenho da zona: geometria do FADI (cada borda ancorada na barra que a criou, projeção à
+// direita, CE pontilhada saindo do meio do intervalo das âncoras), mas SEM contorno — as duas
+// linhas de borda são 100% transparentes e servem só de trilho para o linefill, e a tampa
+// vertical da direita não existe. O label fica POR DENTRO da ponta direita: `style_label_right`
+// põe o corpo do label à esquerda da âncora (o `style_label_left` jogaria para fora da zona).
+// A CE termina htfFvgCeGap antes dessa ponta, senão passaria por baixo do texto do label.
+htfFvg_Add(array<HtfFVG> arr, bool bullish, int tOld, int tNew, float zTop, float zBot, string tfTxt) =>
+    color base = bullish ? htfFvgBullColor : htfFvgBearColor
+    float pA   = bullish ? zBot : zTop
+    float pB   = bullish ? zTop : zBot
+    float mid  = (zTop + zBot) / 2
+    int   xA   = htfFvg_Anchor(pA, tOld, tOld, bullish, true)
+    int   xB   = htfFvg_Anchor(pB, tOld, tNew, not bullish, false)
+    int   xR   = time + htfFvgMs * (htfFvgExt + 1)
+    color inv  = color.new(base, 100)
+    line  lnA  = line.new(xA, pA, xR, pA, xloc = xloc.bar_time, style = line.style_solid, color = inv, width = 1)
+    line  lnB  = line.new(xB, pB, xR, pB, xloc = xloc.bar_time, style = line.style_solid, color = inv, width = 1)
+    linefill fl = linefill.new(lnA, lnB, color.new(base, HTF_FVG_BG))
+    int   xCe1 = (xA + xB) / 2
+    line  lnCe = line.new(xCe1, mid, int(math.max(xR - htfFvgCeGap, xCe1)), mid, xloc = xloc.bar_time, style = line.style_dotted, color = color.new(base, 60), width = 1)
+    label lb   = showHtfFvgLabel ? label.new(xR, mid, tfTxt, xloc = xloc.bar_time, style = label.style_label_right, color = noColor, textcolor = base, size = size.small, text_font_family = font.family_monospace) : na
+    arr.push(HtfFVG.new(lnA, lnB, lnCe, fl, lb, zTop, zBot, mid, bullish))
+    while arr.size() > htfFvgCount
+        HtfFVG old = arr.shift()
+        htfFvg_Del(old)
+
+// Estende, aplica a invalidação e devolve `true` se o candle atual tocou algum FVG ainda aberto.
+// A invalidação segue o padrão FADI: avaliada SÓ no fechamento de um candle do timeframe maior
+// (checkMit) e SÓ pelo corpo desse candle (bodyLo/bodyHi = min/max de open e close). O pavio
+// não invalida nada, e o corpo precisa fechar além da borda de ORIGEM do gap — ou seja,
+// atravessar a zona por inteiro, não apenas encostar no lado mais próximo.
+// Só a geometria da ponta direita espera a última barra (como o UPZ do FADI): no histórico ela
+// seria sobrescrita de qualquer jeito. O toque e a invalidação continuam sendo avaliados barra
+// a barra, porque alimentam a tabela de confluência.
+htfFvg_Manage(array<HtfFVG> arr, bool checkMit, float bodyLo, float bodyHi) =>
+    bool touched = false
+    int  xR      = time + htfFvgMs * (htfFvgExt + 1)
+    if arr.size() > 0
+        for i = arr.size() - 1 to 0
+            HtfFVG f = arr.get(i)
+            if not f.filled
+                if low <= f.top and high >= f.bottom
+                    touched := true
+                bool full = checkMit and (f.bullish ? bodyLo < f.bottom : bodyHi > f.top)
+                if full
+                    if htfFvgKeepFilled
+                        // Para de se estender e fica cinza na barra em que foi invalidado.
+                        f.filled := true
+                        htfFvg_SetRight(f, time)
+                        htfFvg_SetColor(f, htfFvgFilledColor)
+                    else
+                        htfFvg_Del(f)
+                        arr.remove(i)
+                else if barstate.islast
+                    htfFvg_SetRight(f, xR)
+    touched
+//#endregion
+
+
+//#region[Functions and Methods - SMT]
+// Até 2 pares correlacionados padrão, SEMPRE da mesma classe do símbolo do gráfico
+// (micro casa com micro, mini com mini, CFD com CFD da mesma corretora).
+// Retorna "" nos slots que não se aplicam. É a fonte de ativos "Auto (IFVG)"; sem nenhum
+// par, o SMT fica desligado até o usuário escolher os símbolos em Manual.
+smt_AutoPair() =>
+    string t = str.upper(syminfo.ticker)
+    string a = ""
+    string b = ""
+    string bareA = ""
+    string bareB = ""
+
+    // --- Futuros de índice: micros entre si, minis entre si ---
+    if str.startswith(t, "MNQ")
+        a := "CME_MINI:MES1!"
+        b := "CBOT_MINI:MYM1!"
+    else if str.startswith(t, "MES")
+        a := "CME_MINI:MNQ1!"
+        b := "CBOT_MINI:MYM1!"
+    else if str.startswith(t, "MYM")
+        a := "CME_MINI:MES1!"
+        b := "CME_MINI:MNQ1!"
+    else if str.startswith(t, "M2K")
+        a := "CME_MINI:MES1!"
+        b := "CME_MINI:MNQ1!"
+    else if str.startswith(t, "NQ")
+        a := "CME_MINI:ES1!"
+        b := "CBOT_MINI:YM1!"
+    else if str.startswith(t, "ES")
+        a := "CME_MINI:NQ1!"
+        b := "CBOT_MINI:YM1!"
+    else if str.startswith(t, "YM")
+        a := "CME_MINI:ES1!"
+        b := "CME_MINI:NQ1!"
+    else if str.startswith(t, "RTY")
+        a := "CME_MINI:ES1!"
+        b := "CME_MINI:NQ1!"
+
+    // --- Metais (SIL antes de SI, MGC antes de GC) ---
+    else if str.startswith(t, "MGC")
+        a := "COMEX:SIL1!"
+    else if str.startswith(t, "GC")
+        a := "COMEX:SI1!"
+    else if str.startswith(t, "SIL")
+        a := "COMEX:MGC1!"
+    else if str.startswith(t, "SI")
+        a := "COMEX:GC1!"
+
+    // --- Índices CFD: fecha o trio Nasdaq / S&P / Dow mantendo o padrão de nome da corretora ---
+    else if str.contains(t, "NAS100")
+        bareA := str.replace_all(t, "NAS100", "SPX500")
+        bareB := str.replace_all(t, "NAS100", "US30")
+    else if str.contains(t, "USTEC")
+        bareA := str.replace_all(t, "USTEC", "US500")
+        bareB := str.replace_all(t, "USTEC", "US30")
+    else if str.contains(t, "US100")
+        bareA := str.replace_all(t, "US100", "US500")
+        bareB := str.replace_all(t, "US100", "US30")
+    else if str.contains(t, "SPX500")
+        bareA := str.replace_all(t, "SPX500", "NAS100")
+        bareB := str.replace_all(t, "SPX500", "US30")
+    else if str.contains(t, "US500")
+        bareA := str.replace_all(t, "US500", "US100")
+        bareB := str.replace_all(t, "US500", "US30")
+    else if str.contains(t, "US30")
+        // OANDA usa US30USD/SPX500USD/NAS100USD; a maioria das outras usa US30/US500/US100.
+        if str.endswith(t, "USD")
+            bareA := str.replace_all(t, "US30", "SPX500")
+            bareB := str.replace_all(t, "US30", "NAS100")
+        else
+            bareA := str.replace_all(t, "US30", "US500")
+            bareB := str.replace_all(t, "US30", "US100")
+
+    // --- Metais spot, forex e cripto: só 1 par natural ---
+    else if str.contains(t, "XAU")
+        bareA := str.replace_all(t, "XAU", "XAG")
+    else if str.contains(t, "XAG")
+        bareA := str.replace_all(t, "XAG", "XAU")
+    else if str.contains(t, "EURUSD")
+        bareA := str.replace_all(t, "EURUSD", "GBPUSD")
+    else if str.contains(t, "GBPUSD")
+        bareA := str.replace_all(t, "GBPUSD", "EURUSD")
+    else if str.contains(t, "AUDUSD")
+        bareA := str.replace_all(t, "AUDUSD", "NZDUSD")
+    else if str.contains(t, "NZDUSD")
+        bareA := str.replace_all(t, "NZDUSD", "AUDUSD")
+    else if str.startswith(t, "BTC")
+        bareA := str.replace_all(t, "BTC", "ETH")
+    else if str.startswith(t, "ETH")
+        bareA := str.replace_all(t, "ETH", "BTC")
+
+    if bareA != ""
+        a := syminfo.prefix == "" ? bareA : syminfo.prefix + ":" + bareA
+    if bareB != ""
+        b := syminfo.prefix == "" ? bareB : syminfo.prefix + ":" + bareB
+    [a, b]
+
+// "CME_MINI:ES1!" -> "ES1!"
+smt_fss(x) =>
+    p = str.split(x, ":")
+    array.size(p) > 1 ? array.get(p, 1) : x
+
+// ---------------------------------------------------------------------------------------
+// SMT de pavios adjacentes (motor do PO3)
+// ---------------------------------------------------------------------------------------
+// Um sinal de pavio vale enquanto o ativo correlacionado NÃO tomar o próprio nível. Quando
+// ele finalmente toma, a divergência deixou de existir e o desenho sai do gráfico.
+smt_finv(line[] la, label[] lba, float[] ra, bool isUp, float cv) =>
+    i = array.size(la) - 1
+    while i >= 0
+        if isUp ? cv > array.get(ra, i) : cv < array.get(ra, i)
+            ln = array.get(la, i)
+            lb = array.get(lba, i)
+            if not na(ln)
+                line.delete(ln)
+            if not na(lb)
+                label.delete(lb)
+            array.remove(la, i)
+            array.remove(lba, i)
+            array.remove(ra, i)
+        i := i - 1
+
+smt_fpa(en, ud, udp, dd, ddp, hv, lv, hp, lp, chp, clp, chn, cln, SmtArrHD st, lbl, col) =>
+    if en
+        smt_finv(st.ul, st.ub, st.ur, true, chn)
+        smt_finv(st.dl, st.db, st.dr, false, cln)
+        cx = int(math.round((time + time[1]) / 2.0))
+        if ud and not udp
+            ln = line.new(smt_n, hv, smt_n[1], hp, color=col, width=smt_lw, style=smt_lsL)
+            lb = smt_showLabels ? label.new(cx, (hv + hp) / 2.0, lbl, xloc=xloc.bar_time, style=label.style_label_down, color=smt_W100, textcolor=col, size=smt_lzL) : na
+            array.push(st.ul, ln)
+            array.push(st.ub, lb)
+            array.push(st.ur, chp)
+            array.set(smtWickBars, 1, smt_n)   // topo = setup de venda
+        if dd and not ddp
+            ln = line.new(smt_n, lv, smt_n[1], lp, color=col, width=smt_lw, style=smt_lsL)
+            lb = smt_showLabels ? label.new(cx, (lv + lp) / 2.0, lbl, xloc=xloc.bar_time, style=label.style_label_up, color=smt_W100, textcolor=col, size=smt_lzL) : na
+            array.push(st.dl, ln)
+            array.push(st.db, lb)
+            array.push(st.dr, clp)
+            array.set(smtWickBars, 0, smt_n)   // fundo = setup de compra
+        while array.size(st.ul) > smt_mxShow
+            line.delete(array.shift(st.ul))
+            label.delete(array.shift(st.ub))
+            array.shift(st.ur)
+        while array.size(st.dl) > smt_mxShow
+            line.delete(array.shift(st.dl))
+            label.delete(array.shift(st.db))
+            array.shift(st.dr)
+    true
+
+// ---------------------------------------------------------------------------------------
+// SMT de pivô (motor do PO3)
+// ---------------------------------------------------------------------------------------
+// Compara o pivô atual com o anterior nas duas séries. Cada chamada carrega o próprio
+// estado de série (o Pine faz inline), então as três escalas não se misturam.
+smt_gd(ph, y2, sy2, ln, col, lbl, float[] dedup) =>
+    var float y1 = na
+    var float sy1 = na
+    var int x1 = na
+    var float xt = na
+    var smt = 0
+    if y2 != y2[1] and sy2 != sy2[1]
+        if (y2 - y1) * (sy2 - sy1) < 0
+            dup = array.includes(dedup, y2)
+            if not dup
+                // Sinais ja sao opostos (teste acima), entao o lado do grafico decide o grau:
+                // num topo, y2 > y1 = o grafico TOMOU o pivo anterior e o par nao acompanhou.
+                bool  _strong = ph == (y2 > y1)
+                color _sCol   = _strong ? col : color.new(col, smt_wkFade)
+                if _strong or showSmtWeak
+                    array.push(smt_pvLn, line.new(smt_n[ln], y2, x1, y1, color=_sCol, width=smt_lw, style=smt_lsL))
+                    array.push(smt_pvLb, smt_showLabels ? label.new(int(math.round((xt + time[ln]) / 2.0)), (y1 + y2) / 2.0, lbl, xloc=xloc.bar_time, style=ph ? label.style_label_down : label.style_label_up, color=smt_W100, textcolor=_sCol, size=smt_lzL) : na)
+                    while array.size(smt_pvLn) > smt_mxShow
+                        line.delete(array.shift(smt_pvLn))
+                        label.delete(array.shift(smt_pvLb))
+                array.push(dedup, y2)
+                // Só o grau FORTE conta como confluência na tabela.
+                if _strong
+                    array.set(smtRefBars, ph ? 1 : 0, smt_n[ln])
+                if array.size(dedup) > 20
+                    array.shift(dedup)
+                smt += 1
+        sy1 := sy2
+        y1 := y2
+        x1 := smt_n[ln]
+        xt := time[ln]
+    else if (ph and y2 > y2[1]) or (not ph and y2 < y2[1])
+        sy1 := na
+        y1 := y2
+        x1 := smt_n[ln]
+        xt := time[ln]
+    smt
+
+smt_gdSet(rph, rpl, rphL, rplL, rphS, rplS, ph1, pl1, phL, plL, phS, plS, col, tkr, float[] dedupH, float[] dedupL) =>
+    smt_gd(true, rph, ph1, smt_L1, col, tkr, dedupH)
+    smt_gd(false, rpl, pl1, smt_L1, col, tkr, dedupL)
+    smt_gd(true, rphL, phL, smt_L2, col, tkr, dedupH)
+    smt_gd(false, rplL, plL, smt_L2, col, tkr, dedupL)
+    smt_gd(true, rphS, phS, smt_L3, col, tkr, dedupH)
+    smt_gd(false, rplS, plS, smt_L3, col, tkr, dedupL)
+
+smt_pv6(float h, float l) =>
+    [fixnan(ta.pivothigh(h, smt_L1, smt_L1)), fixnan(ta.pivotlow(l, smt_L1, smt_L1)), fixnan(ta.pivothigh(h, smt_L2, smt_L2)), fixnan(ta.pivotlow(l, smt_L2, smt_L2)), fixnan(ta.pivothigh(h, smt_L3, smt_L3)), fixnan(ta.pivotlow(l, smt_L3, smt_L3))]
+
+// ---------------------------------------------------------------------------------------
+// SMT de FVG (motor do PO3)
+// ---------------------------------------------------------------------------------------
+// Acompanha o FVG mais recente de um lado numa série e avisa quando ele acabou de ser
+// mitigado.
+smt_trackFVG(SmtFVG st, h, l, isBull) =>
+    justMit = false
+    formed = isBull ? (l > h[2]) : (h < l[2])
+    if formed
+        st.top := isBull ? l : l[2]
+        st.bot := isBull ? h[2] : h
+        st.fbar := bar_index[2]
+        st.mit := false
+    else if not st.mit
+        if isBull ? (l <= st.top) : (h >= st.bot)
+            st.mit := true
+            justMit := true
+    justMit
+
+smt_fBox(SmtFVG st, isBull) =>
+    if smt_fShowBox
+        if not st.mit and not na(st.top)
+            if na(st.bx)
+                bcol = isBull ? color.new(#75887F, smt_fBoxTr) : color.new(#967575, smt_fBoxTr)
+                st.bx := box.new(st.fbar, st.top, bar_index, st.bot, border_color=na, bgcolor=bcol)
+            else
+                box.set_right(st.bx, bar_index)
+        else if st.mit and not na(st.bx)
+            box.delete(st.bx)
+            st.bx := na
+    true
+
+// Um ativo mitigou o FVG dele e o outro continua com o FVG aberto = divergência.
+smt_chkFVGSMT(mainJust, SmtFVG other, SmtFVG my, touchY, isBull, col, lbl) =>
+    sig = false
+    if mainJust and not other.mit and (bar_index - other.fbar) <= smt_fMaxAge
+        if not na(my.top) and not na(my.bot)
+            box _fsb = na
+            if smt_fShowBox
+                _fsb := box.new(my.fbar, my.top, bar_index, my.bot, border_color=na, bgcolor=color.new(col, smt_fBoxTr))
+            leftY = isBull ? my.top : my.bot
+            leftX = my.fbar + 2
+            _fsl = line.new(leftX, leftY, bar_index, touchY, color=col, width=smt_lw, style=line.style_dotted)
+            label _fslb = na
+            if smt_showLabels
+                _fvgOff = bar_index - leftX
+                _fvgLblX = int(math.round((time[_fvgOff] + time) / 2.0))
+                _fslb := label.new(_fvgLblX, (leftY + touchY) / 2.0, lbl, xloc=xloc.bar_time, style=isBull ? label.style_label_up : label.style_label_down, color=smt_W100, textcolor=col, size=smt_lzL)
+            array.push(smt_fsBx, _fsb), array.push(smt_fsLn, _fsl), array.push(smt_fsLb, _fslb)
+            while array.size(smt_fsLn) > smt_fMxShow
+                box.delete(array.shift(smt_fsBx))
+                line.delete(array.shift(smt_fsLn))
+                label.delete(array.shift(smt_fsLb))
+            sig := true
+    sig
+
+smt_fvgAsset(en, ch, cl, inv, nBuJ, nBeJ, SmtFVG mBu, SmtFVG mBe, c, t) =>
+    if en
+        var SmtFVG sBu = SmtFVG.new(na, na, na, true, na)
+        var SmtFVG sBe = SmtFVG.new(na, na, na, true, na)
+        nJu = smt_trackFVG(sBu, ch, cl, true)
+        smt_fBox(sBu, true)
+        nJe = smt_trackFVG(sBe, ch, cl, false)
+        smt_fBox(sBe, false)
+        oBu = inv ? sBe : sBu
+        oBe = inv ? sBu : sBe
+        smt_chkFVGSMT(nBuJ, oBu, mBu, low, true, c, t)
+        smt_chkFVGSMT(inv ? nJe : nJu, mBu, oBu, inv ? ch : cl, true, c, t)
+        smt_chkFVGSMT(nBeJ, oBe, mBe, high, false, c, t)
+        smt_chkFVGSMT(inv ? nJu : nJe, mBe, oBe, inv ? cl : ch, false, c, t)
+    true
+//#endregion
+
+
+//#region[Logic - Sweep Detector]
+htf = htfMode == "Auto" ? autoHTF() : customHTF
+
+var float htfCurH     = high
+var int   htfCurHTime = time
+var float htfCurL     = low
+var int   htfCurLTime = time
+
+var float[] htfHighs    = array.new<float>()
+var float[] htfLows     = array.new<float>()
+var int[]   htfHighTime = array.new<int>()
+var int[]   htfLowTime  = array.new<int>()
+
+htfChanged = time(htf) != time(htf)[1]
+
+if htfChanged
+    htfHighs.push(htfCurH)
+    htfLows.push(htfCurL)
+    htfHighTime.push(htfCurHTime)
+    htfLowTime.push(htfCurLTime)
+    if htfHighs.size() > MAX_SWING_HISTORY + 5
+        htfHighs.shift()
+        htfLows.shift()
+        htfHighTime.shift()
+        htfLowTime.shift()
+    htfCurH     := high
+    htfCurHTime := time
+    htfCurL     := low
+    htfCurLTime := time
+else
+    if high > htfCurH
+        htfCurH     := high
+        htfCurHTime := time
+    if low < htfCurL
+        htfCurL     := low
+        htfCurLTime := time
+
+if htfChanged and htfHighs.size() >= 3
+    n = htfHighs.size()
+    midHigh = htfHighs.get(n - 2)
+    if midHigh >= htfHighs.get(n - 3) and midHigh >= htfHighs.get(n - 1)
+        stHigh.addPoint(midHigh, htfHighTime.get(n - 2))
+
+    midLow = htfLows.get(n - 2)
+    if midLow <= htfLows.get(n - 3) and midLow <= htfLows.get(n - 1)
+        stLow.addPoint(midLow, htfLowTime.get(n - 2))
+
+[sweepLowFound, sweepLowPrice, sweepLowTime]    = stLow.findSweep(low, false)
+[sweepHighFound, sweepHighPrice, sweepHighTime] = stHigh.findSweep(high, true)
+
+// Níveis de referência para batizar a liquidez varrida. lookahead_on + offset [1] =
+// dia/semana ANTERIOR já fechado, sem repaint.
+[pdhLvl, pdlLvl] = request.security(syminfo.tickerid, "1D", [high[1], low[1]], lookahead = barmerge.lookahead_on)
+[pwhLvl, pwlLvl] = request.security(syminfo.tickerid, "1W", [high[1], low[1]], lookahead = barmerge.lookahead_on)
+
+liqPWH.price := pwhLvl
+liqPDH.price := pdhLvl
+liqPWL.price := pwlLvl
+liqPDL.price := pdlLvl
+
+// Libera os nomes de novo a cada período. Sem isso, um cluster de equal highs em cima do
+// PDH geraria vários labels "PDH" empilhados no mesmo preço.
+if time("1D") != time("1D")[1]
+    liqPDH.used := false
+    liqPDL.used := false
+if time("1W") != time("1W")[1]
+    liqPWH.used := false
+    liqPWL.used := false
+//#endregion
+
+
+//#region[Logic - HTF FVG]
+htfFvgTF          = htfFvgTfMode == "Auto" ? htf : htfFvgCustomTF
+bool   htfFvgOn   = showHtfFvg and timeframe.in_seconds(htfFvgTF) >= timeframe.in_seconds(timeframe.period)
+string htfFvgTxt  = fmtTF(htfFvgTF) + " FVG"
+
+// Candles 1, 2 e 3 já fechados do timeframe maior. O FVG é o gap entre o candle 1 e o candle 3.
+// lookahead_on + offset [1] é o idioma sem repintagem: entrega o último candle HTF FECHADO,
+// sem o candle extra de atraso que o lookahead_off introduziria nos bars históricos.
+[hfO1, hfH1, hfL1, hfC1, hfH3, hfL3, hfT3, hfT1] = request.security(syminfo.tickerid, htfFvgTF, [open[1], high[1], low[1], close[1], high[3], low[3], time[3], time[1]], lookahead = barmerge.lookahead_on)
+
+bool newHtfClose = not na(hfT1) and (na(hfT1[1]) or hfT1 != hfT1[1])
+
+// Corpo do último candle HTF fechado — é ele, e só ele, que invalida um gap.
+float hfBodyLo = math.min(hfO1, hfC1)
+float hfBodyHi = math.max(hfO1, hfC1)
+
+if htfFvgOn and newHtfClose and not na(hfH3) and not na(hfT3)
+    if hfL1 > hfH3
+        htfFvg_Add(htfFvgBull, true, hfT3, hfT1, hfL1, hfH3, htfFvgTxt)
+    else if hfH1 < hfL3
+        htfFvg_Add(htfFvgBear, false, hfT3, hfT1, hfL3, hfH1, htfFvgTxt)
+
+if htfFvgOn
+    bool checkMit = newHtfClose and not na(hfO1) and not na(hfC1)
+    if htfFvg_Manage(htfFvgBull, checkMit, hfBodyLo, hfBodyHi)
+        htfFvgTouchBull := bar_index
+    if htfFvg_Manage(htfFvgBear, checkMit, hfBodyLo, hfBodyHi)
+        htfFvgTouchBear := bar_index
+//#endregion
+
+
+//#region[Logic - SMT]
+// --- Ativos correlacionados -------------------------------------------------------------
+// Triad       : a correlação automática do PO3, copiada dele (índices futuros entre si,
+//               metais, forex, cripto e índices CFD). Fora da lista, o SMT fica desligado.
+// Auto (IFVG) : o pareamento do próprio IFVG, que monta o par com o prefixo da corretora.
+// Manual      : os dois símbolos escolhidos nos inputs.
+var string _scsym = na
+var string _sts3  = na
+var bool   _stok  = false
+var array<bool> _sinv = array.from(false, false)
+_ssym = syminfo.tickerid
+_sc(t) => str.contains(_ssym, t)
+if barstate.isfirst and smt_srcMode == "Triad"
+    ssmt_st4="OANDA:XAUUSD", ssmt_st5="OANDA:XAGUSD", ssmt_st6="OANDA:XPTUSD", ssmt_st7="BINANCE:BTCUSDT.P",ssmt_st8="BINANCE:ETHUSDT.P", ssmt_st9="BINANCE:XRPUSDT.P"
+    ssmt_st10= "CME_MINI:MNQ1!", ssmt_st11= "CME_MINI:MES1!", ssmt_st12= "CBOT_MINI:MYM1!", ssmt_st13= "FOREXCOM:EURUSD", ssmt_st14= "FOREXCOM:GBPUSD", ssmt_st15= "TICKMILL:DXY"
+    ssmt_st16= "CAPITALCOM:NAS100", ssmt_st17= "CAPITALCOM:US500", ssmt_st18= "CAPITALCOM:US30", ssmt_st19= "COMEX:GC1!", ssmt_st20= "COMEX:SI1!", ssmt_st21= "NYMEX:PL1!"
+    // Versões MINI dos mesmos contratos. O Triad do PO3 só tinha as micro e pareava MNQ com
+    // MES/MYM mesmo num gráfico de NQ; aqui o par acompanha a CLASSE do símbolo do gráfico.
+    ssmt_st22= "CME_MINI:NQ1!", ssmt_st23= "CME_MINI:ES1!", ssmt_st24= "CBOT_MINI:YM1!", ssmt_st25= "COMEX:SIL1!", ssmt_st26= "COMEX:MGC1!"
+    _sts2=_ssym
+    _scsym := _ssym
+    _sts3 := _ssym
+    _INQ=_sc("NQ") or _sc("MNQ"), _IES=_sc("ES") or _sc("MES"), _IYM=_sc("YM") or _sc("MYM"), _IGC=_sc("GC") or _sc("MGC"), _ISI=_sc("SI") or _sc("MSI"), _ISL=_sc("PL") or _sc("MSL"), _G2=_sc("XAU") or _sc("XAG") or _sc("XPT")
+    _G3=_sc("BTC") or _sc("ETH") or _sc("XRP"), _G4=_INQ or _IES or _IYM, _G5=_sc("EURUSD") or _sc("GBPUSD") or _sc("DXY")
+    _G6=_sc("US100") or _sc("USTEC") or _sc("NAS100") or _sc("US500") or _sc("SPX500") or _sc("SP500") or _sc("US30"), _G7=_IGC or _ISI or _ISL
+    // Gráfico em contrato MICRO? Então os pares também são micro; senão, mini/cheio.
+    _mic=_sc("MNQ") or _sc("MES") or _sc("MYM") or _sc("MGC") or _sc("SIL")
+    _stok := _G2 or _G3 or _G4 or _G5 or _G6 or _G7
+    if _stok
+        if _G2
+            _sts2:=str.contains(_ssym,"XAU") ? ssmt_st5 : ssmt_st4, _sts3:=str.contains(_ssym,"XPT") ? ssmt_st5 : ssmt_st6
+        else if _G3
+            _sts2:=str.contains(_ssym,"BTC") ? ssmt_st8 : ssmt_st7, _sts3:=str.contains(_ssym,"BTC") ? ssmt_st9 : (str.contains(_ssym,"ETH") ? ssmt_st9 : ssmt_st8)
+        else if _G4
+            if _INQ
+                _sts2:=_mic ? ssmt_st11 : ssmt_st23, _sts3:=_mic ? ssmt_st12 : ssmt_st24
+            else if _IES
+                _sts2:=_mic ? ssmt_st10 : ssmt_st22, _sts3:=_mic ? ssmt_st12 : ssmt_st24
+            else if _IYM
+                _sts2:=_mic ? ssmt_st10 : ssmt_st22, _sts3:=_mic ? ssmt_st11 : ssmt_st23
+        else if _G5
+            _sts2:=str.contains(_ssym,"EURUSD") ? ssmt_st14 : ssmt_st13, _sts3:=str.contains(_ssym,"EURUSD") ? ssmt_st15 : (str.contains(_ssym,"GBPUSD") ? ssmt_st15 : ssmt_st14)
+        else if _G6
+            _sts2:=str.contains(_ssym,"US100") ? ssmt_st17 : (str.contains(_ssym,"US500") ? ssmt_st16 : ssmt_st16), _sts3:=str.contains(_ssym,"US100") ? ssmt_st18 : (str.contains(_ssym,"US500") ? ssmt_st18 : ssmt_st17)
+        else if _G7
+            if _IGC
+                _sts2:=_mic ? ssmt_st25 : ssmt_st20, _sts3:=ssmt_st21
+            else if _ISI
+                _sts2:=_mic ? ssmt_st26 : ssmt_st19, _sts3:=ssmt_st21
+            else if _ISL
+                _sts2:=ssmt_st19, _sts3:=ssmt_st20
+    if _stok
+        _scsym:=syminfo.type == "futures" ? ticker.modify(_sts2, session=syminfo.session, backadjustment=backadjustment.off) : _sts2
+        _sts3:=syminfo.type == "futures" and _sts3 != _ssym ? ticker.modify(_sts3, session=syminfo.session, backadjustment=backadjustment.off) : _sts3
+if barstate.isfirst and smt_srcMode == "Auto (IFVG)"
+    [_autoA, _autoB] = smt_AutoPair()
+    _scsym := _autoA != "" ? _autoA : _ssym
+    _sts3  := _autoB != "" ? _autoB : _ssym
+    _stok  := _autoA != "" or _autoB != ""
+if barstate.isfirst and smt_srcMode == "Manual"
+    _scsym := smt_manA2 != "" ? smt_manA2 : _ssym
+    _sts3  := smt_manA3 != "" ? smt_manA3 : _ssym
+    _stok  := true
+    array.set(_sinv, 0, smt_manInv2)
+    array.set(_sinv, 1, smt_manInv3)
+
+smt_s1   = showSMT and _stok ? _scsym : ""
+smt_ok1  = smt_s1 != "" and smt_s1 != _ssym
+smt_s2   = showSMT and _stok and _sts3 != _ssym ? _sts3 : ""
+smt_e2   = smt_s2 != ""
+smt_inv1 = _stok ? array.get(_sinv, 0) : false
+smt_inv2 = _stok ? array.get(_sinv, 1) : false
+smt_t1   = smt_ok1 ? smt_fss(smt_s1) : ""
+smt_t2   = smt_e2 ? smt_fss(smt_s2) : ""
+
+// ignore_invalid_symbol: se o par não existir na corretora, volta `na` e o SMT simplesmente
+// não dispara — em vez de derrubar o indicador inteiro com "invalid symbol".
+[smt_ch, smt_cl]   = request.security(smt_ok1 ? smt_s1 : syminfo.tickerid, timeframe.period, [high, low], ignore_invalid_symbol=true)
+[smt_c2h, smt_c2l] = request.security(smt_e2 ? smt_s2 : syminfo.tickerid, timeframe.period, [high, low], ignore_invalid_symbol=true)
+
+// --- SMT de pavios adjacentes -------------------------------------------------------------
+smt_hhm = high > high[1]
+smt_llm = low < low[1]
+smt_hhc = smt_inv1 ? (smt_cl < smt_cl[1]) : (smt_ch > smt_ch[1])
+smt_llc = smt_inv1 ? (smt_ch > smt_ch[1]) : (smt_cl < smt_cl[1])
+smt_chp = smt_inv1 ? smt_cl[1] : smt_ch[1]
+smt_clp = smt_inv1 ? smt_ch[1] : smt_cl[1]
+smt_chn = smt_inv1 ? smt_cl : smt_ch
+smt_cln = smt_inv1 ? smt_ch : smt_cl
+var SmtArrHD smt_a1 = SmtArrHD.new(array.new_line(), array.new_label(), array.new_float(), array.new_line(), array.new_label(), array.new_float())
+smt_ud1 = smt_eA and smt_ok1 and smt_hhm and not smt_hhc
+smt_dd1 = smt_eA and smt_ok1 and smt_llm and not smt_llc
+smt_fpa(smt_eA and smt_ok1, smt_ud1, smt_ud1[1], smt_dd1, smt_dd1[1], high, low, high[1], low[1], smt_chp, smt_clp, smt_chn, smt_cln, smt_a1, smt_t1, smt_c1)
+smt_hhc2 = smt_inv2 ? (smt_c2l < smt_c2l[1]) : (smt_c2h > smt_c2h[1])
+smt_llc2 = smt_inv2 ? (smt_c2h > smt_c2h[1]) : (smt_c2l < smt_c2l[1])
+smt_c2hp = smt_inv2 ? smt_c2l[1] : smt_c2h[1]
+smt_c2lp = smt_inv2 ? smt_c2h[1] : smt_c2l[1]
+smt_c2hn = smt_inv2 ? smt_c2l : smt_c2h
+smt_c2ln = smt_inv2 ? smt_c2h : smt_c2l
+var SmtArrHD smt_a2 = SmtArrHD.new(array.new_line(), array.new_label(), array.new_float(), array.new_line(), array.new_label(), array.new_float())
+smt_ud2 = smt_eA and smt_e2 and smt_hhm and not smt_hhc2
+smt_dd2 = smt_eA and smt_e2 and smt_llm and not smt_llc2
+smt_fpa(smt_eA and smt_e2, smt_ud2, smt_ud2[1], smt_dd2, smt_dd2[1], high, low, high[1], low[1], smt_c2hp, smt_c2lp, smt_c2hn, smt_c2ln, smt_a2, smt_t2, smt_c2)
+
+// --- SMT de pivô (três escalas em paralelo) -----------------------------------------------
+if smt_eP
+    [rph, rpl, rphL, rplL, rphS, rplS] = smt_pv6(high, low)
+    if smt_ok1
+        [cph, cpl, cphL, cplL, cphS, cplS] = smt_pv6(smt_ch, smt_cl)
+        smt_gdSet(rph, rpl, rphL, rplL, rphS, rplS, smt_inv1 ? cpl : cph, smt_inv1 ? cph : cpl, smt_inv1 ? cplL : cphL, smt_inv1 ? cphL : cplL, smt_inv1 ? cplS : cphS, smt_inv1 ? cphS : cplS, smt_c1, smt_t1, smt_dedH1, smt_dedL1)
+    if smt_e2
+        [c2ph, c2pl, c2phL, c2plL, c2phS, c2plS] = smt_pv6(smt_c2h, smt_c2l)
+        smt_gdSet(rph, rpl, rphL, rplL, rphS, rplS, smt_inv2 ? c2pl : c2ph, smt_inv2 ? c2ph : c2pl, smt_inv2 ? c2plL : c2phL, smt_inv2 ? c2phL : c2plL, smt_inv2 ? c2plS : c2phS, smt_inv2 ? c2phS : c2plS, smt_c2, smt_t2, smt_dedH2, smt_dedL2)
+
+// --- SMT de FVG ---------------------------------------------------------------------------
+if showSMT and smt_eF
+    var SmtFVG mBu = SmtFVG.new(na, na, na, true, na)
+    var SmtFVG mBe = SmtFVG.new(na, na, na, true, na)
+    nBuJ = smt_trackFVG(mBu, high, low, true)
+    smt_fBox(mBu, true)
+    nBeJ = smt_trackFVG(mBe, high, low, false)
+    smt_fBox(mBe, false)
+    smt_fvgAsset(smt_ok1, smt_ch, smt_cl, smt_inv1, nBuJ, nBeJ, mBu, mBe, smt_c1, smt_t1)
+    smt_fvgAsset(smt_e2, smt_c2h, smt_c2l, smt_inv2, nBuJ, nBeJ, mBu, mBe, smt_c2, smt_t2)
+
+// Nomes que o watermark consome.
+smtOnA   = smt_ok1
+smtOnB   = smt_e2
+smtOn    = smtOnA or smtOnB
+smtNameA = smt_t1
+smtNameB = smt_t2
+//#endregion
+
+
+//#region[Logic - IFVG]
+var SwingFVG[] validBullish  = array.new<SwingFVG>()
+var SwingFVG[] validBearish  = array.new<SwingFVG>()
+var Trade[]    activeTrades  = array.new<Trade>()
+
+int  graceCandles      = allowExtIFVG ? 15 : 6
+bool enableBullOutput  = biasMode != "Bearish"
+bool enableBearOutput  = biasMode != "Bullish"
+
+if enableBearOutput
+    ict_TrackLine(true, validBullish, sweepHighFound, sweepHighPrice, sweepHighTime, sweepColorSell, liqHighs)
+if enableBullOutput
+    ict_TrackLine(false, validBearish, sweepLowFound, sweepLowPrice, sweepLowTime, sweepColorBuy, liqLows)
+
+if enableBearOutput
+    ict_CheckIFVG(validBullish, activeTrades, false, graceCandles)
+if enableBullOutput
+    ict_CheckIFVG(validBearish, activeTrades, true, graceCandles)
+
+ict_ManageTrades(activeTrades)
+
+// A CADA barra, e fora do ict_ManageTrades de proposito: um setup congelado sai do
+// activeTrades em 1-2 barras e nunca mais seria reavaliado. O lastSetup entra separado
+// porque o setup parado no stop ja saiu do setupRecords.
+ict_SmtLate(setupRecords)
+ict_SmtLate(lastSetup)
+//#endregion
+
+
+//#region[Confluence Table]
+// Checklist do setup mais recente, no formato do DodgysDD: uma linha por critério, marca na
+// coluna Status e a NOTA no topo. Nada é recalculado aqui — cada critério é congelado no
+// momento em que o IFVG é confirmado; a tabela só mostra o que ficou gravado no setup.
+if showConfluenceTable and barstate.islast
+    var table confTable = na
+    if not na(confTable)
+        table.delete(confTable)
+    confTable := table.new(tablePosition, 2, 10, bgcolor = colorTableBg, border_width = 1, border_color = color.new(color.gray, 50))
+
+    // Le do lastSetup e nao do setupRecords: o setup que bate no stop sai do setupRecords
+    // (para sumir do grafico) e a tabela voltaria a descrever um setup ANTIGO.
+    Trade tr = na
+    if lastSetup.size() > 0
+        tr := lastSetup.get(0)
+    bool has = not na(tr)
+
+    // Os campos são copiados para variáveis locais porque ler campo de um objeto `na` é erro
+    // de execução no Pine, e o `and` não garante curto-circuito.
+    bool  cSweep  = false
+    bool  cFvg    = false
+    bool  cDelta  = false
+    bool  cTgt    = false
+    bool  cSmt    = false
+    bool  cVol    = false
+    bool  dltHas  = false
+    float dltVal  = na
+    float tgtVal  = na
+    bool  isBull  = false
+    bool  isValid = false
+    bool  isStop  = false
+    string grdTxt = "-"
+    color  grdCol = color.gray
+    string grdTip = "Nenhum setup no gráfico."
+
+    if has
+        cSweep  := tr.sweptHTF
+        cFvg    := tr.htfFvgOk
+        cDelta  := tr.deltaImb
+        cTgt    := tr.clearTgt
+        cSmt    := tr.smtOk
+        cVol    := tr.volSpike
+        dltVal  := tr.deltaVal
+        dltHas  := not na(tr.deltaVal)
+        tgtVal  := tr.tgtPrice
+        isBull  := tr.bullish
+        isValid := tr.validReached
+        isStop  := tr.stopped
+        [scHits, scTot] = conf_Score(tr)
+        [gTxt, gCol]    = conf_Grade(scHits, scTot)
+        grdTxt := gTxt
+        grdCol := gCol
+        grdTip := "Contagem simples: " + str.tostring(scHits) + " de " + str.tostring(scTot) + " critérios aplicáveis.\n\n100% = A+  |  >=80% = A  |  >=60% = B  |  >=40% = C  |  resto = D.\n\nCritério de módulo desligado (SMT / HTF FVG) ou sem dado (delta sem intrabar) sai da conta em vez de contar como falha."
+
+    table.cell(confTable, 0, 0, "Setup Grade", text_color = color.white, bgcolor = colorTableHeader, text_size = tableTextSize, text_halign = text.align_left, tooltip = grdTip)
+    table.cell(confTable, 1, 0, grdTxt,        text_color = grdCol,      bgcolor = colorTableHeader, text_size = tableTextSize, tooltip = grdTip)
+    table.cell(confTable, 0, 1, "Checklist",   text_color = color.white, bgcolor = colorTableHeader, text_size = tableTextSize, text_halign = text.align_left)
+    table.cell(confTable, 1, 1, "Status",      text_color = color.white, bgcolor = colorTableHeader, text_size = tableTextSize)
+
+    string smtRow = "SMT" + (smtOn ? " w/ " + (smtOnA ? smtNameA : "") + (smtOnA and smtOnB ? "/" : "") + (smtOnB ? smtNameB : "") : "")
+    // O texto acompanha o input "SMT: pavio adjacente conta na tabela" para o veredito da
+    // linha nunca parecer arbitrário quando comparado com os labels do gráfico.
+    string smtTip = "Divergência SMT na direção do setup, com o sinal entre o swing de origem e a barra de entrada.\n\nCONTAM AQUI: " + (smtCountWicks ? "pivô de grau FORTE e pavio adjacente (a linha curta ligando duas velas vizinhas)." : "só o pivô de grau FORTE.") + "\n\nNÃO CONTAM: " + (smtCountWicks ? "SMT de FVG e divergência FRACA." : "pavio adjacente, SMT de FVG e divergência FRACA — é normal ver um label de SMT no topo com esta linha em X.") + "\n\nO sinal de pivô só é confirmado algumas velas depois dele, então esta linha pode virar de X para V com o setup já no gráfico."
+    string dltTip = "Delta desequilibrado a favor do setup no candle de confirmação (aproximado pelo volume do timeframe menor). O mínimo é o input Delta Imbalance." + (dltHas ? "\n\nNeste setup: " + str.tostring(dltVal * 100, "#.#") + "% (positivo = comprador)." : "\n\nSem dado intrabar neste setup — o critério sai da conta da nota.")
+    string tgtTip = "Existe liquidez oposta ainda não varrida na direção do trade, longe o bastante (input Clear Target mín.) e sem FVG do timeframe maior contrário no caminho." + (na(tgtVal) ? "" : "\n\nAlvo deste setup: " + str.tostring(tgtVal, format.mintick))
+
+    conf_Row(confTable, 2, "Liquidity Sweep",  has,               cSweep, "Sweep de liquidez no timeframe maior durante o swing do setup.")
+    conf_Row(confTable, 3, "HTF PDA Delivery", has and showHtfFvg, cFvg,  "O preço entregou dentro de um FVG do timeframe maior na direção do setup durante a formação dele.")
+    conf_Row(confTable, 4, "Delta Imbalance",  has and dltHas,    cDelta, dltTip)
+    conf_Row(confTable, 5, "IFVG",             has,               has,    "O setup só existe porque houve um IFVG confirmado — este critério é sempre atendido e serve de base da nota.")
+    conf_Row(confTable, 6, "Clear Targets",    has,               cTgt,   tgtTip)
+    conf_Row(confTable, 7, smtRow,             has and showSMT,   cSmt,   smtTip)
+    conf_Row(confTable, 8, "Volume",           has,               cVol,   "Volume do candle de confirmação acima da média de 20.")
+
+    string dirTxt = has ? (isBull ? "Compra" : "Venda") : "-"
+    color  dirCol = has ? (isBull ? colorIFVGBull : colorIFVGBear) : color.gray
+    // Tres estados: Stop (bateu no stop e ja saiu do grafico), B.E/1R (atingiu o criterio
+    // de validade) e Ativo.
+    string stTxt  = has ? (isStop ? "Stop" : isValid ? (validityCriteria == "1R" ? "1R" : "B.E") : "Ativo") : "-"
+    color  stCol  = has ? (isStop ? colorSL : isValid ? colorBE : color.gray) : color.gray
+    table.cell(confTable, 0, 9, dirTxt, text_color = dirCol, text_size = tableTextSize, text_halign = text.align_left)
+    table.cell(confTable, 1, 9, stTxt,  text_color = stCol,  text_size = tableTextSize)
+//#endregion
+
+
+//#region[Watermark]
+wm_numTF = timeframe.isminutes ? (str.tonumber(timeframe.period) % 60 == 0 ? str.tostring(str.tonumber(timeframe.period) / 60) : timeframe.period) : timeframe.period
+wm_txtTF = timeframe.isminutes ? (str.tonumber(timeframe.period) % 60 == 0 ? "H" : "m") : ""
+wm_tf    = wm_numTF + wm_txtTF
+
+wm_line1 = "IFVG Ultimate+ (" + wm_tf + ")"
+wm_line2 = syminfo.ticker
+wm_line3 = "Liquidity: " + (htfMode == "Auto" ? "Auto (" + htf + ")" : "Custom (" + htf + ")")
+wm_line4 = "Bias: " + biasMode
+wm_smt   = not smtOn ? "off" : (smtOnA ? smtNameA : "") + (smtOnA and smtOnB ? "/" : "") + (smtOnB ? smtNameB : "")
+wm_line5 = "FVG: " + (htfFvgOn ? fmtTF(htfFvgTF) : "off") + "  |  SMT: " + wm_smt
+wm_line6 = str.tostring(dayofmonth(time_close)) + "/" + str.tostring(month(time_close)) + "/" + str.tostring(year(time_close))
+
+if showWatermark and barstate.islast
+    wmTable = table.new(position.bottom_center, 1, 6, frame_width = 0)
+    table.cell(wmTable, 0, 0, wm_line1, text_color = wmTextColor, text_halign = "center", text_size = wmSize1, bgcolor = wmBgColor, text_font_family = font.family_monospace)
+    table.cell(wmTable, 0, 1, wm_line2, text_color = wmTextColor, text_halign = "center", text_size = wmSize1, bgcolor = wmBgColor, text_font_family = font.family_monospace)
+    table.cell(wmTable, 0, 2, wm_line3, text_color = wmTextColor, text_halign = "center", text_size = wmSize3, bgcolor = wmBgColor, text_font_family = font.family_monospace)
+    table.cell(wmTable, 0, 3, wm_line4, text_color = wmTextColor, text_halign = "center", text_size = wmSize3, bgcolor = wmBgColor, text_font_family = font.family_monospace)
+    table.cell(wmTable, 0, 4, wm_line5, text_color = wmTextColor, text_halign = "center", text_size = wmSize3, bgcolor = wmBgColor, text_font_family = font.family_monospace)
+    table.cell(wmTable, 0, 5, wm_line6, text_color = wmTextColor, text_halign = "center", text_size = wmSize3, bgcolor = wmBgColor, text_font_family = font.family_monospace)
+//#endregion

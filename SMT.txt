@@ -1,0 +1,276 @@
+//@version=6
+indicator("SMT by HDSXN", overlay=true, max_lines_count=500, max_labels_count=500)
+var G1 = "Settings"
+var G2 = "Style"
+s1 = input.symbol("ES1!", "Comparison Symbol", group=G1)
+e2 = input.bool(false, "Enable 2nd Comparison Symbol", group=G1)
+s2 = input.symbol("YM1!", "2nd Comparison Symbol", group=G1)
+e3 = input.bool(false, "Enable 3rd Comparison Symbol", group=G1)
+s3 = input.symbol("RTY1!", "3rd Comparison Symbol", group=G1)
+eA = input.bool(true, "Adjacent Wicks", group=G1, inline="m")
+eP = input.bool(true, "Pivots", group=G1, inline="m")
+L1 = input.int(5, "Primary", minval=2, group=G1, inline="l")
+L2 = input.int(8, "Secondary", minval=2, group=G1, inline="l")
+L3 = input.int(3, "Tertiary", minval=2, group=G1, inline="l")
+c1 = input.color(color.black, "Line Color (1st Asset)", group=G2, inline="c")
+lw = input.int(1, "Width", minval=1, maxval=4, group=G2, inline="c")
+ls = input.string("Solid", "Style", options=["Solid", "Dotted", "Dashed"], group=G2, inline="c")
+c2 = input.color(color.blue, "Line Color (2nd Asset)", group=G2, inline="c2")
+c3 = input.color(color.purple, "Line Color (3rd Asset)", group=G2, inline="c3")
+lz = input.string("Tiny", "Label Size", options=["Auto", "Tiny", "Small", "Normal", "Large", "Huge"], group=G2)
+var G3 = "FVG SMT"
+eF = input.bool(true, "Enable FVG SMT", group=G3)
+fMaxAge = input.int(50, "Max Bars Between FVGs to Compare", minval=5, group=G3)
+fShowBox = input.bool(true, "Show FVG Boxes", group=G3)
+fBoxTr = input.int(88, "Box Transparency", minval=0, maxval=100, group=G3)
+lsL = switch ls
+    "Solid" => line.style_solid
+    "Dotted" => line.style_dotted
+    => line.style_dashed
+lzL = switch lz
+    "Auto" => size.auto
+    "Tiny" => size.tiny
+    "Small" => size.small
+    "Normal" => size.normal
+    "Large" => size.large
+    "Huge" => size.huge
+    => size.small
+fss(x) =>
+    p = str.split(x, ":")
+    array.size(p) > 1 ? array.get(p, 1) : x
+t1 = fss(s1)
+t2 = fss(s2)
+t3 = fss(s3)
+n = bar_index
+[ch, cl] = request.security(s1, timeframe.period, [high, low])
+[c2h, c2l] = request.security(s2, timeframe.period, [high, low])
+[c3h, c3l] = request.security(s3, timeframe.period, [high, low])
+
+type SmtArr
+    array<line> ul
+    array<label> ub
+    array<float> ur
+    array<line> dl
+    array<label> db
+    array<float> dr
+
+fpa(en, ud, udp, dd, ddp, hv, lv, hp, lp, chp, clp, chn, cln, SmtArr st, lbl, col, wd, sty, sz, tn, tp) =>
+    if en
+        i = array.size(st.ul) - 1
+        while i >= 0
+            if chn > array.get(st.ur, i)
+                ln = array.get(st.ul, i)
+                lb = array.get(st.ub, i)
+                if not na(ln)
+                    line.delete(ln)
+                if not na(lb)
+                    label.delete(lb)
+                array.remove(st.ul, i)
+                array.remove(st.ub, i)
+                array.remove(st.ur, i)
+            i := i - 1
+        j = array.size(st.dl) - 1
+        while j >= 0
+            if cln < array.get(st.dr, j)
+                ln = array.get(st.dl, j)
+                lb = array.get(st.db, j)
+                if not na(ln)
+                    line.delete(ln)
+                if not na(lb)
+                    label.delete(lb)
+                array.remove(st.dl, j)
+                array.remove(st.db, j)
+                array.remove(st.dr, j)
+            j := j - 1
+        cx = int(math.round((tn + tp) / 2.0))
+        if ud and not udp
+            ln = line.new(n, hv, n[1], hp, color=col, width=wd, style=sty)
+            lb = label.new(cx, (hv + hp) / 2.0, lbl, xloc=xloc.bar_time, style=label.style_none, textcolor=col, size=sz)
+            array.push(st.ul, ln)
+            array.push(st.ub, lb)
+            array.push(st.ur, chp)
+        if dd and not ddp
+            ln = line.new(n, lv, n[1], lp, color=col, width=wd, style=sty)
+            lb = label.new(cx, (lv + lp) / 2.0, lbl, xloc=xloc.bar_time, style=label.style_none, textcolor=col, size=sz)
+            array.push(st.dl, ln)
+            array.push(st.db, lb)
+            array.push(st.dr, clp)
+    true
+
+hhm = high > high[1]
+hhc = ch > ch[1]
+llm = low < low[1]
+llc = cl < cl[1]
+var SmtArr a1 = SmtArr.new(array.new_line(), array.new_label(), array.new_float(), array.new_line(), array.new_label(), array.new_float())
+ud1 = eA and hhm and not hhc
+dd1 = eA and llm and not llc
+fpa(eA, ud1, ud1[1], dd1, dd1[1], high, low, high[1], low[1], ch[1], cl[1], ch, cl, a1, t1, c1, lw, lsL, lzL, time, time[1])
+
+hhc2 = c2h > c2h[1]
+llc2 = c2l < c2l[1]
+var SmtArr a2 = SmtArr.new(array.new_line(), array.new_label(), array.new_float(), array.new_line(), array.new_label(), array.new_float())
+ud2 = eA and e2 and hhm and not hhc2
+dd2 = eA and e2 and llm and not llc2
+fpa(eA and e2, ud2, ud2[1], dd2, dd2[1], high, low, high[1], low[1], c2h[1], c2l[1], c2h, c2l, a2, t2, c2, lw, lsL, lzL, time, time[1])
+
+hhc3 = c3h > c3h[1]
+llc3 = c3l < c3l[1]
+var SmtArr a3 = SmtArr.new(array.new_line(), array.new_label(), array.new_float(), array.new_line(), array.new_label(), array.new_float())
+ud3 = eA and e3 and hhm and not hhc3
+dd3 = eA and e3 and llm and not llc3
+fpa(eA and e3, ud3, ud3[1], dd3, dd3[1], high, low, high[1], low[1], c3h[1], c3l[1], c3h, c3l, a3, t3, c3, lw, lsL, lzL, time, time[1])
+
+gd(ph, y2, sy2, ln, col, lbl) =>
+    var float y1 = na
+    var float sy1 = na
+    var int x1 = na
+    var float xt = na
+    var smt = 0
+    if y2 != y2[1] and sy2 != sy2[1]
+        if (y2 - y1) * (sy2 - sy1) < 0
+            line.new(n[ln], y2, x1, y1, color=col, width=lw, style=lsL)
+            label.new(int(math.round((xt + time[ln]) / 2.0)), (y1 + y2) / 2.0, lbl, xloc=xloc.bar_time, style=label.style_none, textcolor=col, size=lzL)
+            smt += 1
+        sy1 := sy2
+        y1 := y2
+        x1 := n[ln]
+        xt := time[ln]
+    else if (ph and y2 > y2[1]) or (not ph and y2 < y2[1])
+        sy1 := na
+        y1 := y2
+        x1 := n[ln]
+        xt := time[ln]
+    smt
+
+gdSet(rph, rpl, rphL, rplL, rphS, rplS, ph1, pl1, phL, plL, phS, plS, col, tkr) =>
+    gd(true, rph, ph1, L1, col, tkr)
+    gd(false, rpl, pl1, L1, col, tkr)
+    gd(true, rphL, phL, L2, col, tkr)
+    gd(false, rplL, plL, L2, col, tkr)
+    gd(true, rphS, phS, L3, col, tkr)
+    gd(false, rplS, plS, L3, col, tkr)
+
+if eP
+    rph = fixnan(ta.pivothigh(L1, L1))
+    rpl = fixnan(ta.pivotlow(L1, L1))
+    rphL = fixnan(ta.pivothigh(L2, L2))
+    rplL = fixnan(ta.pivotlow(L2, L2))
+    rphS = fixnan(ta.pivothigh(L3, L3))
+    rplS = fixnan(ta.pivotlow(L3, L3))
+    cph = fixnan(ta.pivothigh(ch, L1, L1))
+    cpl = fixnan(ta.pivotlow(cl, L1, L1))
+    cphL = fixnan(ta.pivothigh(ch, L2, L2))
+    cplL = fixnan(ta.pivotlow(cl, L2, L2))
+    cphS = fixnan(ta.pivothigh(ch, L3, L3))
+    cplS = fixnan(ta.pivotlow(cl, L3, L3))
+    gdSet(rph, rpl, rphL, rplL, rphS, rplS, cph, cpl, cphL, cplL, cphS, cplS, c1, t1)
+    if e2
+        c2ph = fixnan(ta.pivothigh(c2h, L1, L1))
+        c2pl = fixnan(ta.pivotlow(c2l, L1, L1))
+        c2phL = fixnan(ta.pivothigh(c2h, L2, L2))
+        c2plL = fixnan(ta.pivotlow(c2l, L2, L2))
+        c2phS = fixnan(ta.pivothigh(c2h, L3, L3))
+        c2plS = fixnan(ta.pivotlow(c2l, L3, L3))
+        gdSet(rph, rpl, rphL, rplL, rphS, rplS, c2ph, c2pl, c2phL, c2plL, c2phS, c2plS, c2, t2)
+    if e3
+        c3ph = fixnan(ta.pivothigh(c3h, L1, L1))
+        c3pl = fixnan(ta.pivotlow(c3l, L1, L1))
+        c3phL = fixnan(ta.pivothigh(c3h, L2, L2))
+        c3plL = fixnan(ta.pivotlow(c3l, L2, L2))
+        c3phS = fixnan(ta.pivothigh(c3h, L3, L3))
+        c3plS = fixnan(ta.pivotlow(c3l, L3, L3))
+        gdSet(rph, rpl, rphL, rplL, rphS, rplS, c3ph, c3pl, c3phL, c3plL, c3phS, c3plS, c3, t3)
+
+// ===================== FVG SMT MODULE =====================
+type FVG
+    float top
+    float bot
+    int fbar
+    bool mit
+    box bx
+
+trackFVG(FVG st, h, l, isBull) =>
+    justMit = false
+    formed = isBull ? (l > h[2]) : (h < l[2])
+    if formed
+        st.top := isBull ? l : l[2]
+        st.bot := isBull ? h[2] : h
+        st.fbar := bar_index[2]
+        st.mit := false
+    else if not st.mit
+        if isBull ? (l <= st.top) : (h >= st.bot)
+            st.mit := true
+            justMit := true
+    justMit
+
+fBox(FVG st, isBull) =>
+    if fShowBox
+        if not st.mit and not na(st.top)
+            if na(st.bx)
+                bcol = isBull ? color.new(color.teal, fBoxTr) : color.new(color.maroon, fBoxTr)
+                st.bx := box.new(st.fbar, st.top, bar_index, st.bot, border_color=na, bgcolor=bcol)
+            else
+                box.set_right(st.bx, bar_index)
+        else if st.mit and not na(st.bx)
+            box.delete(st.bx)
+            st.bx := na
+    true
+
+chkFVGSMT(mainJust, FVG other, FVG my, touchY, isBull, col, lbl) =>
+    sig = false
+    if mainJust and not other.mit and (bar_index - other.fbar) <= fMaxAge
+        if not na(my.top) and not na(my.bot)
+            if fShowBox
+                box.new(my.fbar, my.top, bar_index, my.bot, border_color=na, bgcolor=color.new(col, fBoxTr))
+            leftY = isBull ? my.top : my.bot
+            leftX = my.fbar + 2
+            line.new(leftX, leftY, bar_index, touchY, color=col, width=lw, style=line.style_dotted)
+            label.new(int(math.round((leftX + bar_index) / 2.0)), (my.top + my.bot) / 2.0, "FVG SMT\n" + lbl, style=label.style_none, textcolor=col, size=size.tiny)
+        sig := true
+    sig
+
+if eF
+    var FVG mBu = FVG.new(na, na, na, true, na)
+    var FVG mBe = FVG.new(na, na, na, true, na)
+    nBuJ = trackFVG(mBu, high, low, true)
+    fBox(mBu, true)
+    nBeJ = trackFVG(mBe, high, low, false)
+    fBox(mBe, false)
+
+    var FVG s1Bu = FVG.new(na, na, na, true, na)
+    var FVG s1Be = FVG.new(na, na, na, true, na)
+    n1BuJ = trackFVG(s1Bu, ch, cl, true)
+    fBox(s1Bu, true)
+    n1BeJ = trackFVG(s1Be, ch, cl, false)
+    fBox(s1Be, false)
+
+    chkFVGSMT(nBuJ, s1Bu, mBu, low, true, c1, t1)
+    chkFVGSMT(n1BuJ, mBu, s1Bu, cl, true, c1, t1)
+    chkFVGSMT(nBeJ, s1Be, mBe, high, false, c1, t1)
+    chkFVGSMT(n1BeJ, mBe, s1Be, ch, false, c1, t1)
+
+    if e2
+        var FVG s2Bu = FVG.new(na, na, na, true, na)
+        var FVG s2Be = FVG.new(na, na, na, true, na)
+        n2BuJ = trackFVG(s2Bu, c2h, c2l, true)
+        fBox(s2Bu, true)
+        n2BeJ = trackFVG(s2Be, c2h, c2l, false)
+        fBox(s2Be, false)
+
+        chkFVGSMT(nBuJ, s2Bu, mBu, low, true, c2, t2)
+        chkFVGSMT(n2BuJ, mBu, s2Bu, c2l, true, c2, t2)
+        chkFVGSMT(nBeJ, s2Be, mBe, high, false, c2, t2)
+        chkFVGSMT(n2BeJ, mBe, s2Be, c2h, false, c2, t2)
+
+    if e3
+        var FVG s3Bu = FVG.new(na, na, na, true, na)
+        var FVG s3Be = FVG.new(na, na, na, true, na)
+        n3BuJ = trackFVG(s3Bu, c3h, c3l, true)
+        fBox(s3Bu, true)
+        n3BeJ = trackFVG(s3Be, c3h, c3l, false)
+        fBox(s3Be, false)
+
+        chkFVGSMT(nBuJ, s3Bu, mBu, low, true, c3, t3)
+        chkFVGSMT(n3BuJ, mBu, s3Bu, c3l, true, c3, t3)
+        chkFVGSMT(nBeJ, s3Be, mBe, high, false, c3, t3)
+        chkFVGSMT(n3BeJ, mBe, s3Be, c3h, false, c3, t3)
