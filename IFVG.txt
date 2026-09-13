@@ -1,0 +1,673 @@
+//@version=5
+indicator("Inverse Fair Value Gap° [Pro+]", shorttitle="IFVG° [Pro+]", overlay=true,
+     max_lines_count=500, max_boxes_count=500, max_labels_count=500, max_bars_back=5000)
+
+type SwingPoint
+    float price
+    int   barIndex
+    bool  taken         = false
+    bool  visualsDrawn  = false
+    line  poolLine      = na
+    label poolLabel     = na
+    label sweepMarker   = na
+
+type RawFVG
+    float top
+    float bottom
+    int   leftBar
+    int   rightBar
+    bool  isBullishOrigin
+    bool  sweepContext  = false
+    float originSweepPrice = na
+    int   originSweepBar   = na
+    box   ghostBox     = na
+    label ghostLabel   = na
+
+type IFVG_Setup
+    float  top
+    float  bottom
+    float  mid
+    int    leftBar
+    int    rightBar
+    bool   isBullish
+    string state           = "INVERTED"
+    float  targetPrice     = na
+    int    targetBarIndex  = na
+    bool   targetHit       = false
+    float  invalidLevel    = na
+    float  invalidSwingLevel = na
+    int    invalidBarIndex = na
+    float  entryPrice      = na
+    box    visualBox    = na
+    line   ceLine       = na
+    line   targetLine   = na
+    label  tagLabel     = na
+    label  targetLabel  = na
+    line   entryLine    = na
+    int    creationBar   = na
+    int    inversionBar  = na
+
+grpAlerts           = "ALERTS SETTINGS"
+i_alertOnInversion  = input.bool(true,  "Alert on IFVG Inversion?", group=grpAlerts)
+i_alertOnTarget     = input.bool(true,  "Alert on Target Hit?",     group=grpAlerts)
+i_alertOnInvalid    = input.bool(false, "Alert on Invalidated?",    group=grpAlerts)
+i_alertOnSweep      = input.bool(false, "Alert on Liquidity Sweep?",group=grpAlerts)
+
+grpGeneral          = "GENERAL SETTINGS"
+i_maxSetups         = input.int(15,            "Max Active Setups", minval=1, maxval=60, group=grpGeneral, tooltip="Maximum number of confirmed IFVG setups kept on chart.")
+i_showInvalidated   = input.bool(false,        "Show Invalidated Setups", group=grpGeneral, tooltip="If disabled, stopped-out trades are completely removed.")
+i_bias              = input.string("Neutral",  "Bias", options=["Neutral", "Bullish", "Bearish"], group=grpGeneral)
+i_fvgThresholdMode  = input.string("All",      "FVG Minimum Threshold", options=["All", "Ticks", "Percent (ATR)"], group=grpGeneral, inline="thresh")
+i_fvgThresholdTicks = input.float(0.3,         "", minval=0.0, step=0.5, group=grpGeneral, inline="thresh")
+
+grpSession          = "SESSION FILTERS"
+i_useSession        = input.bool(false,        "Enable Session Filter?", group=grpSession)
+i_sessionTZ         = input.string("UTC-4",    "Timezone", group=grpSession, inline="s1")
+i_session1          = input.session("0200-0500", "", group=grpSession, inline="s1")
+i_useSession2       = input.bool(false,        "Enable 2nd Session?", group=grpSession, inline="s2")
+i_session2          = input.session("0800-1200", "", group=grpSession, inline="s2")
+i_macrosOnly        = input.bool(false,        "Macros Only (First/Last 10m)", group=grpSession)
+
+grpLiquidity        = "MODEL & LIQUIDITY SETTINGS"
+i_liqTF             = input.timeframe("15",    "Liquidity Timeframe", group=grpLiquidity, inline="liq1")
+i_swingLen          = input.int(15,            "Swing Lookback", minval=2, maxval=50, group=grpLiquidity, inline="liq1")
+i_useFvgFilterTF    = input.bool(false,        "HTF FVG Filter?", group=grpLiquidity, inline="liq2")
+i_fvgFilterTF       = input.timeframe("60",    "", group=grpLiquidity, inline="liq2")
+i_requireSweep      = input.bool(true,         "Require Liquidity Sweep?", group=grpLiquidity, inline="swp")
+i_sweepWindow       = input.int(8,             "Valid Window", minval=1, maxval=200, group=grpLiquidity, inline="swp")
+i_invalidCond       = input.string("Close",    "Invalidation Mode", options=["Close", "Swing"], group=grpLiquidity)
+i_maxSwings         = input.int(8,             "Max Swings Tracked", minval=5, maxval=100, group=grpLiquidity)
+i_rawExpiry         = input.int(80,            "Raw FVG Expiry (bars)", minval=10, maxval=500, group=grpLiquidity)
+
+grpStyle            = "DISPLAY & STYLING"
+i_labelSize         = input.string("Small",    "Global Label Size", options=["Tiny", "Small", "Normal"], group=grpStyle)
+i_showSweepLines    = input.bool(true,         "Sweep Lines", group=grpStyle, inline="swp_disp")
+i_showSweepMarkers  = input.bool(true,         "Markers", group=grpStyle, inline="swp_disp")
+i_liqPoolColor      = input.color(color.new(#4e5057, 0), "", group=grpStyle, inline="swp_disp")
+i_showGhost         = input.bool(true,         "Potential IFVG (Ghost)", group=grpStyle, inline="ghst")
+i_ghostColor        = input.color(color.new(#9598A1, 0), "", group=grpStyle, inline="ghst")
+i_ghostTransparency = input.int(92,            "", minval=0, maxval=100, group=grpStyle, inline="ghst")
+i_showBoxes         = input.bool(true,         "Show IFVG Boxes", group=grpStyle)
+i_extendBoxes       = input.bool(false,        "Extend Active Boxes", group=grpStyle)
+i_borderWidth       = input.int(0,             "Box Border Width", minval=0, maxval=3, group=grpStyle)
+i_bullColor         = input.color(color.new(#2962FF, 0), "Bullish (+IFVG)", group=grpStyle, inline="bll")
+i_boxTransparency   = input.int(85,            "Transp.", minval=0, maxval=100, group=grpStyle, inline="bll")
+i_bearColor         = input.color(color.new(#FF5252, 0), "Bearish (-IFVG)", group=grpStyle, inline="brr")
+i_invalidColor      = input.color(color.new(#787B86, 0), "Invalid Color", group=grpStyle, inline="inv")
+i_invalidTransparency = input.int(90,          "Transp.", minval=0, maxval=100, group=grpStyle, inline="inv")
+i_showCE            = input.bool(false,        "Show Midpoint (CE)", group=grpStyle)
+
+grpTargets          = "TARGET PROJECTIONS"
+i_showTargets       = input.bool(true,         "Show Target Lines", group=grpTargets)
+i_targetLineStyle   = input.string("Dotted",   "Style", options=["Dotted", "Dashed", "Solid"], group=grpTargets, inline="tgt")
+i_stopAtTarget      = input.bool(true,         "Stop Exactly at Hit", group=grpTargets, inline="tgt")
+
+grpTable            = "DASHBOARD TABLE"
+i_showTable         = input.bool(true,         "Show Dashboard?", group=grpTable, inline="tbl1")
+i_tablePosition     = input.string("Bottom Center", "Location", options=["Bottom Left", "Bottom Center", "Bottom Right", "Top Right"], group=grpTable, inline="tbl1")
+i_tableTextSize     = input.string("Tiny",     "Text Size", options=["Tiny", "Small", "Normal"], group=grpTable, inline="tbl2")
+i_tableBgTransp     = input.int(100,           "Background Transp.", minval=0, maxval=100, group=grpTable, inline="tbl2")
+
+var array<SwingPoint> bslArray    = array.new<SwingPoint>()
+var array<SwingPoint> sslArray    = array.new<SwingPoint>()
+var array<RawFVG>     rawFvgArray  = array.new<RawFVG>()
+var array<IFVG_Setup> activeIFVGs  = array.new<IFVG_Setup>()
+
+var int   prevLiqTime       = na
+var int   barsSinceBSLSweep = 9999
+var int   barsSinceSSLSweep = 9999
+var int   ghostGracePeriod  = 150
+
+f_tablePosOf(_pos) =>
+    switch _pos
+        "Bottom Left"   => position.bottom_left
+        "Bottom Center" => position.bottom_center
+        "Bottom Right"  => position.bottom_right
+        "Top Right"     => position.top_right
+        => position.bottom_right
+
+var table hud = table.new(f_tablePosOf(i_tablePosition), 1, 6,
+     bgcolor = color.new(color.black, i_tableBgTransp), border_width = 0, frame_width = 0)
+
+f_secReq(_tf, _src) =>
+    request.security(syminfo.tickerid, _tf, _src, gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+
+f_labelSize(_s) =>
+    _s == "Tiny" ? size.tiny : _s == "Small" ? size.small : size.normal
+
+f_lineStyle() =>
+    i_targetLineStyle == "Dotted" ? line.style_dotted : i_targetLineStyle == "Dashed" ? line.style_dashed : line.style_solid
+
+f_dirColor(_isBullish, _ghost, _invalid) =>
+    _invalid ? i_invalidColor : _ghost ? i_ghostColor : (_isBullish ? i_bullColor : i_bearColor)
+
+f_deleteSwingVisuals(SwingPoint sp) =>
+    if not na(sp.poolLine)
+        line.delete(sp.poolLine)
+    if not na(sp.poolLabel)
+        label.delete(sp.poolLabel)
+    if not na(sp.sweepMarker)
+        label.delete(sp.sweepMarker)
+
+f_trimSwingArray(arr, maxLen) =>
+    while array.size(arr) > maxLen
+        SwingPoint oldest = array.shift(arr)
+        f_deleteSwingVisuals(oldest)
+
+f_deleteGhostVisuals(RawFVG rf) =>
+    if not na(rf.ghostBox)
+        box.delete(rf.ghostBox)
+    if not na(rf.ghostLabel)
+        label.delete(rf.ghostLabel)
+
+f_deleteSetupVisuals(IFVG_Setup s) =>
+    if not na(s.visualBox)
+        box.delete(s.visualBox)
+    if not na(s.ceLine)
+        line.delete(s.ceLine)
+    if not na(s.targetLine)
+        line.delete(s.targetLine)
+    if not na(s.entryLine)
+        line.delete(s.entryLine)
+    if not na(s.tagLabel)
+        label.delete(s.tagLabel)
+    if not na(s.targetLabel)
+        label.delete(s.targetLabel)
+
+f_trimActiveIFVGs(maxLen) =>
+    while array.size(activeIFVGs) > maxLen
+        IFVG_Setup oldest = array.shift(activeIFVGs)
+        f_deleteSetupVisuals(oldest)
+
+f_passesThreshold(_top, _bottom, _atr) =>
+    gapSize = _top - _bottom
+    bool pass = true
+    if i_fvgThresholdMode == "Ticks"
+        pass := gapSize >= i_fvgThresholdTicks * syminfo.mintick
+    else if i_fvgThresholdMode == "Percent (ATR)"
+        pass := gapSize >= i_fvgThresholdTicks * _atr
+    pass
+
+f_nearestUntakenBSL(_fromBar) =>
+    float result = na
+    if array.size(bslArray) > 0
+        for i = array.size(bslArray) - 1 to 0
+            SwingPoint sp = array.get(bslArray, i)
+            if not sp.taken and sp.barIndex < _fromBar
+                result := sp.price
+                break
+    result
+
+f_nearestUntakenSSL(_fromBar) =>
+    float result = na
+    if array.size(sslArray) > 0
+        for i = array.size(sslArray) - 1 to 0
+            SwingPoint sp = array.get(sslArray, i)
+            if not sp.taken and sp.barIndex < _fromBar
+                result := sp.price
+                break
+    result
+
+f_thresholdText() =>
+    switch i_fvgThresholdMode
+        "All"           => "All"
+        "Ticks"         => str.tostring(i_fvgThresholdTicks) + " Ticks"
+        "Percent (ATR)" => str.tostring(i_fvgThresholdTicks) + "x ATR"
+        =>                 "All"
+
+f_sessionText() =>
+    string txt = ""
+    if i_useSession
+        txt := i_session1
+        if i_useSession2
+            txt += " | " + i_session2
+    txt
+
+f_dateText() =>
+    str.format("{0,date,dd MMM yyyy}", time)
+
+f_biasAllows(_isBullish) =>
+    switch i_bias
+        "Bullish" => _isBullish
+        "Bearish" => not _isBullish
+        =>           true
+
+f_findExactHighBar(float val) =>
+    int targetBar = bar_index
+    float minDiff = 1e10
+    for i = 0 to 150
+        diff = math.abs(high[i] - val)
+        if diff < minDiff
+            minDiff := diff
+            targetBar := bar_index - i
+        if diff == 0
+            break
+    targetBar
+
+f_findExactLowBar(float val) =>
+    int targetBar = bar_index
+    float minDiff = 1e10
+    for i = 0 to 150
+        diff = math.abs(low[i] - val)
+        if diff < minDiff
+            minDiff := diff
+            targetBar := bar_index - i
+        if diff == 0
+            break
+    targetBar
+
+f_formatTimeframe(string _tf) =>
+    float val = str.tonumber(_tf)
+    string result = _tf
+    if not na(val)
+        if val >= 1440
+            result := str.tostring(math.round(val / 1440)) + "D"
+        else if val >= 60
+            result := str.tostring(math.round(val / 60)) + "H"
+        else
+            result := str.tostring(math.round(val)) + "m"
+    else
+        if _tf == "D" or _tf == "1D"
+            result := "1D"
+        else if _tf == "W" or _tf == "1W"
+            result := "1W"
+        else if _tf == "M" or _tf == "1M"
+            result := "1M"
+    result
+
+liq_high  = f_secReq(i_liqTF, high)
+liq_low   = f_secReq(i_liqTF, low)
+liq_time  = f_secReq(i_liqTF, time)
+
+bool isNewLiqBar = liq_time != prevLiqTime
+prevLiqTime := liq_time
+
+ffilt_high  = i_useFvgFilterTF ? f_secReq(i_fvgFilterTF, high) : na
+ffilt_low   = i_useFvgFilterTF ? f_secReq(i_fvgFilterTF, low)  : na
+ffilt_time  = i_useFvgFilterTF ? f_secReq(i_fvgFilterTF, time) : na
+
+pivotHighVal   = ta.pivothigh(liq_high, i_swingLen, i_swingLen)
+pivotLowVal    = ta.pivotlow(liq_low,  i_swingLen, i_swingLen)
+
+if not na(pivotHighVal)
+    exactBar = f_findExactHighBar(pivotHighVal)
+    sp = SwingPoint.new(price = pivotHighVal, barIndex = exactBar, taken = false)
+    array.push(bslArray, sp)
+    f_trimSwingArray(bslArray, i_maxSwings)
+
+if not na(pivotLowVal)
+    exactBar = f_findExactLowBar(pivotLowVal)
+    sp = SwingPoint.new(price = pivotLowVal, barIndex = exactBar, taken = false)
+    array.push(sslArray, sp)
+    f_trimSwingArray(sslArray, i_maxSwings)
+
+bool bslSweptThisBar = false
+bool sslSweptThisBar = false
+var float lastSweptBSLPrice = na
+var float lastSweptSSLPrice = na
+var int   lastSweptBSLBar   = na
+var int   lastSweptSSLBar   = na
+
+if array.size(bslArray) > 0
+    for i = array.size(bslArray) - 1 to 0
+        SwingPoint sp = array.get(bslArray, i)
+        if not sp.taken and high > sp.price and bar_index > sp.barIndex
+            sp.taken := true
+            bslSweptThisBar   := true
+            lastSweptBSLPrice := sp.price
+            lastSweptBSLBar   := sp.barIndex
+
+            if i_showSweepLines
+                sp.poolLine := line.new(x1 = sp.barIndex, y1 = sp.price, x2 = bar_index, y2 = sp.price,
+                                         color = color.new(i_liqPoolColor, 35), width = 1, style = line.style_dotted)
+                sp.poolLabel := label.new(x = bar_index - 5, y = sp.price, text = "𝗕𝗦𝗟",
+                                           style = label.style_label_down, color = color.new(color.black, 100),
+                                           textcolor = color.new(i_liqPoolColor, 10), size = f_labelSize(i_labelSize))
+            if i_showSweepMarkers
+                sp.sweepMarker := label.new(x = sp.barIndex, y = sp.price, text = "▲",
+                                             style = label.style_label_down, color = color.new(color.black, 100),
+                                             textcolor = color.new(i_liqPoolColor, 25), size = size.tiny)
+            sp.visualsDrawn := true
+
+            if i_alertOnSweep
+                alert("Buyside Liquidity (BSL) Swept @ " + str.tostring(sp.price), alert.freq_once_per_bar_close)
+
+if array.size(sslArray) > 0
+    for i = array.size(sslArray) - 1 to 0
+        SwingPoint sp = array.get(sslArray, i)
+        if not sp.taken and low < sp.price and bar_index > sp.barIndex
+            sp.taken := true
+            sslSweptThisBar   := true
+            lastSweptSSLPrice := sp.price
+            lastSweptSSLBar   := sp.barIndex
+
+            if i_showSweepLines
+                sp.poolLine := line.new(x1 = sp.barIndex, y1 = sp.price, x2 = bar_index, y2 = sp.price,
+                                         color = color.new(i_liqPoolColor, 35), width = 1, style = line.style_dotted)
+                sp.poolLabel := label.new(x = bar_index - 5, y = sp.price, text = "𝗦𝗦𝗟",
+                                           style = label.style_label_up, color = color.new(color.black, 100),
+                                           textcolor = color.new(i_liqPoolColor, 10), size = f_labelSize(i_labelSize))
+            if i_showSweepMarkers
+                sp.sweepMarker := label.new(x = sp.barIndex, y = sp.price, text = "▼",
+                                             style = label.style_label_up, color = color.new(color.black, 100),
+                                             textcolor = color.new(i_liqPoolColor, 25), size = size.tiny)
+            sp.visualsDrawn := true
+
+            if i_alertOnSweep
+                alert("Sellside Liquidity (SSL) Swept @ " + str.tostring(sp.price), alert.freq_once_per_bar_close)
+
+barsSinceBSLSweep := bslSweptThisBar ? 0 : barsSinceBSLSweep + 1
+barsSinceSSLSweep := sslSweptThisBar ? 0 : barsSinceSSLSweep + 1
+
+bool bslSweepActive = barsSinceBSLSweep <= i_sweepWindow
+bool sslSweepActive = barsSinceSSLSweep <= i_sweepWindow
+
+atrVal = ta.atr(14)
+
+bool rawBullishCond = low > high[2] and f_passesThreshold(low, high[2], atrVal)
+bool rawBearishCond = high < low[2] and f_passesThreshold(low[2], high, atrVal)
+
+bool registerBullish = i_requireSweep ? bslSweepActive : true
+bool registerBearish = i_requireSweep ? sslSweepActive : true
+
+if rawBullishCond and registerBullish
+    rf = RawFVG.new(top = low, bottom = high[2], leftBar = bar_index - 2, rightBar = bar_index,
+                     isBullishOrigin = true, sweepContext = bslSweepActive,
+                     originSweepPrice = lastSweptBSLPrice, originSweepBar = lastSweptBSLBar)
+    array.push(rawFvgArray, rf)
+
+if rawBearishCond and registerBearish
+    rf = RawFVG.new(top = low[2], bottom = high, leftBar = bar_index - 2, rightBar = bar_index,
+                     isBullishOrigin = false, sweepContext = sslSweepActive,
+                     originSweepPrice = lastSweptSSLPrice, originSweepBar = lastSweptSSLBar)
+    array.push(rawFvgArray, rf)
+
+bool inSession1 = not na(time(timeframe.period, i_session1, i_sessionTZ))
+bool inSession2 = not na(time(timeframe.period, i_session2, i_sessionTZ))
+bool isSessionValid = not i_useSession or inSession1 or (i_useSession2 and inSession2)
+
+if array.size(rawFvgArray) > 0
+    for i = array.size(rawFvgArray) - 1 to 0
+        RawFVG rf = array.get(rawFvgArray, i)
+        bool expired     = (bar_index - rf.rightBar) > i_rawExpiry
+        bool priceInside = close <= rf.top and close >= rf.bottom
+        bool invertsUp    = not rf.isBullishOrigin and close > rf.top
+        bool invertsDown  = rf.isBullishOrigin and close < rf.bottom
+
+        if expired
+            f_deleteGhostVisuals(rf)
+            array.remove(rawFvgArray, i)
+
+        else if invertsUp
+            if isSessionValid and (not i_requireSweep or sslSweepActive) and (not i_macrosOnly or (minute(time) <= 10 or minute(time) >= 50))
+                tgt = f_nearestUntakenBSL(bar_index)
+                f_deleteGhostVisuals(rf)
+                setup = IFVG_Setup.new(
+                     top = rf.top, bottom = rf.bottom, mid = (rf.top + rf.bottom) / 2.0,
+                     leftBar = rf.leftBar, rightBar = bar_index, isBullish = true,
+                     state = "INVERTED", targetPrice = tgt, targetBarIndex = na, targetHit = false,
+                     invalidLevel = rf.bottom, invalidSwingLevel = rf.originSweepPrice, entryPrice = close, creationBar = bar_index, inversionBar = bar_index)
+                array.push(activeIFVGs, setup)
+            f_deleteGhostVisuals(rf)
+            array.remove(rawFvgArray, i)
+
+        else if invertsDown
+            if isSessionValid and (not i_requireSweep or bslSweepActive) and (not i_macrosOnly or (minute(time) <= 10 or minute(time) >= 50))
+                tgt = f_nearestUntakenSSL(bar_index)
+                f_deleteGhostVisuals(rf)
+                setup = IFVG_Setup.new(
+                     top = rf.top, bottom = rf.bottom, mid = (rf.top + rf.bottom) / 2.0,
+                     leftBar = rf.leftBar, rightBar = bar_index, isBullish = false,
+                     state = "INVERTED", targetPrice = tgt, targetBarIndex = na, targetHit = false,
+                     invalidLevel = rf.top, invalidSwingLevel = rf.originSweepPrice, entryPrice = close, creationBar = bar_index, inversionBar = bar_index)
+                array.push(activeIFVGs, setup)
+            f_deleteGhostVisuals(rf)
+            array.remove(rawFvgArray, i)
+
+        else if i_showGhost and priceInside
+            if na(rf.ghostBox)
+                rf.ghostBox := box.new(left = rf.leftBar, top = rf.top, right = bar_index, bottom = rf.bottom, border_color = color.new(i_ghostColor, 60), border_width = i_borderWidth, bgcolor = color.new(i_ghostColor, i_ghostTransparency), extend = extend.none)
+                rf.ghostLabel := label.new(x = bar_index, y = (rf.top + rf.bottom) / 2.0, text = "?IFVG", style = label.style_label_left, color = color.new(color.black, 100), textcolor = color.new(i_ghostColor, 10), size = f_labelSize(i_labelSize))
+            else
+                box.set_right(rf.ghostBox, bar_index)
+                label.set_x(rf.ghostLabel, bar_index)
+        else
+            na
+
+if array.size(activeIFVGs) > 0
+    for i = array.size(activeIFVGs) - 1 to 0
+        IFVG_Setup s = array.get(activeIFVGs, i)
+        if s.state == "INVERTED" and not na(s.targetPrice)
+            if s.isBullish and high >= s.targetPrice
+                s.targetHit      := true
+                s.targetBarIndex := bar_index
+                s.state          := "TARGET_HIT"
+                if i_alertOnTarget
+                    alert("+IFVG Target (BSL) Hit @ " + str.tostring(s.targetPrice), alert.freq_once_per_bar_close)
+            else if not s.isBullish and low <= s.targetPrice
+                s.targetHit      := true
+                s.targetBarIndex := bar_index
+                s.state          := "TARGET_HIT"
+                if i_alertOnTarget
+                    alert("-IFVG Target (SSL) Hit @ " + str.tostring(s.targetPrice), alert.freq_once_per_bar_close)
+
+f_checkInvalidation(IFVG_Setup s) =>
+    bool invalid = false
+    if s.state == "INVERTED"
+        if i_invalidCond == "Close"
+            if s.isBullish and close < s.invalidLevel
+                invalid := true
+            else if not s.isBullish and close > s.invalidLevel
+                invalid := true
+        else if i_invalidCond == "Swing"
+            sweptLevel = na(s.invalidSwingLevel) ? s.invalidLevel : s.invalidSwingLevel
+            if s.isBullish and close < sweptLevel
+                invalid := true
+            else if not s.isBullish and close > sweptLevel
+                invalid := true
+    invalid
+
+if array.size(activeIFVGs) > 0
+    for i = array.size(activeIFVGs) - 1 to 0
+        IFVG_Setup s = array.get(activeIFVGs, i)
+        if s.state == "INVERTED" and f_checkInvalidation(s)
+            s.state           := "INVALIDATED"
+            s.invalidBarIndex := bar_index
+            if i_alertOnInvalid
+                alert((s.isBullish ? "+IFVG" : "-IFVG") + " Invalidated @ " + str.tostring(close), alert.freq_once_per_bar_close)
+
+f_createSetupVisuals(IFVG_Setup s) =>
+    bool ghost   = false
+    bool invalid = s.state == "INVALIDATED"
+    col = f_dirColor(s.isBullish, ghost, invalid)
+
+    boxRight = i_extendBoxes ? bar_index : (s.leftBar + 2)
+    boxCol = i_showBoxes ? color.new(col, invalid ? i_invalidTransparency : i_boxTransparency) : color.new(color.black, 100)
+    borderColor = i_showBoxes ? color.new(col, i_borderWidth == 0 ? 100 : 40) : color.new(color.black, 100)
+    s.visualBox := box.new(left = s.leftBar, top = s.top, right = boxRight, bottom = s.bottom, border_color = borderColor, border_width = i_borderWidth, bgcolor = boxCol, extend = extend.none)
+
+    if i_showCE
+        s.ceLine := line.new(x1 = s.leftBar, y1 = s.mid, x2 = boxRight, y2 = s.mid, color = color.new(col, 20), width = 1, style = line.style_dotted)
+
+    entryPrice = na(s.entryPrice) ? (s.isBullish ? s.top : s.bottom) : s.entryPrice
+    int limitX = math.min(bar_index, s.inversionBar + 4)
+    s.entryLine := line.new(x1 = s.inversionBar, y1 = entryPrice, x2 = limitX, y2 = entryPrice, 
+                             color = col, width = 2, style = line.style_solid)
+
+    string tagTxt = (s.isBullish ? "+𝗜𝗙𝗩𝗚" : "-𝗜𝗙𝗩𝗚") + (invalid ? " ✗" : "")
+    s.tagLabel := label.new(x = limitX, y = entryPrice, text = tagTxt, style = label.style_label_left, color = color.new(color.black, 100), textcolor = col, size = f_labelSize(i_labelSize))
+
+    if i_showTargets and not na(s.targetPrice) and not invalid
+        targetSwingBar = s.isBullish ? f_findExactHighBar(s.targetPrice) : f_findExactLowBar(s.targetPrice)
+        
+        s.targetLine := line.new(x1 = targetSwingBar, y1 = s.targetPrice, x2 = bar_index, y2 = s.targetPrice, color = color.new(col, 30), width = 1, style = f_lineStyle())
+        string tTxt = s.isBullish ? "𝗕𝗦𝗟" : "𝗦𝗦🇱"
+        s.targetLabel := label.new(x = bar_index, y = s.targetPrice, text = tTxt, style = label.style_label_left, color = color.new(color.black, 100), textcolor = col, size = f_labelSize(i_labelSize))
+
+f_updateSetupVisuals(IFVG_Setup s) =>
+    bool ghost   = false
+    bool invalid = s.state == "INVALIDATED"
+    col = f_dirColor(s.isBullish, ghost, invalid)
+    boxCol = color.new(col, invalid ? i_invalidTransparency : i_boxTransparency)
+
+    int boxRight = s.leftBar + 2
+    if i_extendBoxes
+        if s.state == "INVERTED"
+            boxRight := bar_index
+        else if invalid and not na(s.invalidBarIndex)
+            boxRight := s.invalidBarIndex
+        else if s.state == "TARGET_HIT" and not na(s.targetBarIndex)
+            boxRight := s.targetBarIndex
+
+    if not na(s.visualBox)
+        boxCol = i_showBoxes ? color.new(col, invalid ? i_invalidTransparency : i_boxTransparency) : color.new(color.black, 100)
+        borderColor = i_showBoxes ? color.new(col, i_borderWidth == 0 ? 100 : 40) : color.new(color.black, 100)
+        box.set_right(s.visualBox, boxRight)
+        box.set_border_color(s.visualBox, borderColor)
+        box.set_bgcolor(s.visualBox, boxCol)
+
+    if i_showCE and not na(s.ceLine)
+        line.set_x2(s.ceLine, boxRight)
+        line.set_color(s.ceLine, color.new(col, 20))
+
+    if not na(s.entryLine)
+        stopX = math.min(bar_index, s.inversionBar + 4)
+        line.set_x2(s.entryLine, stopX)
+        line.set_color(s.entryLine, col)
+
+    if not na(s.tagLabel)
+        int labelX = math.min(bar_index, s.inversionBar + 4)
+        if invalid and not na(s.invalidBarIndex)
+            labelX := math.min(s.invalidBarIndex, s.inversionBar + 4)
+            
+        label.set_x(s.tagLabel, labelX)
+            
+        bool hasWarning = false
+        if s.state == "INVERTED" and i_invalidCond == "Swing"
+            if s.isBullish and close < s.invalidLevel
+                hasWarning := true
+            else if not s.isBullish and close > s.invalidLevel
+                hasWarning := true
+
+        string tagTxt = (s.isBullish ? "+𝗜𝗙𝗩𝗚" : "-𝗜𝗙𝗩𝗚") + (invalid ? " ✗" : (hasWarning ? " ⚠️" : ""))
+        label.set_text(s.tagLabel, tagTxt)
+        label.set_textcolor(s.tagLabel, col)
+
+    if i_showTargets and not na(s.targetLine)
+        if invalid
+            line.set_color(s.targetLine, color.new(color.black, 100))
+            if not na(s.targetLabel)
+                label.set_textcolor(s.targetLabel, color.new(color.black, 100))
+        else
+            int stopX = (i_stopAtTarget and s.targetHit) ? s.targetBarIndex : bar_index
+            line.set_x2(s.targetLine, stopX)
+            line.set_color(s.targetLine, color.new(col, s.targetHit ? 0 : 30))
+            if not na(s.targetLabel)
+                label.set_x(s.targetLabel, stopX)
+                label.set_textcolor(s.targetLabel, col)
+                
+                if s.targetHit and not na(s.targetBarIndex)
+                    offset = bar_index - s.targetBarIndex
+                    targetY = s.isBullish ? high[offset] : low[offset]
+                    label.set_y(s.targetLabel, targetY)
+                    label.set_text(s.targetLabel, "𝗧")
+                    label.set_style(s.targetLabel, s.isBullish ? label.style_label_down : label.style_label_up)
+                else
+                    label.set_y(s.targetLabel, s.targetPrice)
+                    label.set_text(s.targetLabel, s.isBullish ? "𝗕𝗦𝗟" : "𝗦𝗦𝗟")
+                    label.set_style(s.targetLabel, label.style_label_left)
+
+if array.size(activeIFVGs) > 0
+    for i = 0 to array.size(activeIFVGs) - 1
+        IFVG_Setup s = array.get(activeIFVGs, i)
+        if na(s.visualBox)
+            f_createSetupVisuals(s)
+        else
+            f_updateSetupVisuals(s)
+
+f_trimActiveIFVGs(i_maxSetups)
+
+if array.size(activeIFVGs) > 0
+    for i = array.size(activeIFVGs) - 1 to 0
+        IFVG_Setup s = array.get(activeIFVGs, i)
+        bool resolved    = s.state == "TARGET_HIT" or s.state == "INVALIDATED"
+        int  resolvedBar = s.state == "TARGET_HIT" ? s.targetBarIndex : s.invalidBarIndex
+        if resolved and not na(resolvedBar) and (bar_index - resolvedBar) > ghostGracePeriod
+            f_deleteSetupVisuals(s)
+            array.remove(activeIFVGs, i)
+
+f_trimSwingArray(bslArray, i_maxSwings)
+f_trimSwingArray(sslArray, i_maxSwings)
+
+if array.size(activeIFVGs) > 0
+    for i = 0 to array.size(activeIFVGs) - 1
+        IFVG_Setup s = array.get(activeIFVGs, i)
+        bool visible = f_biasAllows(s.isBullish)
+        bool invalid = s.state == "INVALIDATED"
+        
+        if invalid and not i_showInvalidated
+            visible := false
+            
+        col = f_dirColor(s.isBullish, false, invalid)
+
+        if not na(s.visualBox)
+            boxCol = i_showBoxes ? color.new(col, invalid ? i_invalidTransparency : i_boxTransparency) : color.new(color.black, 100)
+            borderColor = i_showBoxes ? color.new(col, i_borderWidth == 0 ? 100 : 40) : color.new(color.black, 100)
+            box.set_bgcolor(s.visualBox, visible ? boxCol : color.new(color.black, 100))
+            box.set_border_color(s.visualBox, visible ? borderColor : color.new(color.black, 100))
+        if not na(s.ceLine)
+            line.set_color(s.ceLine, visible ? color.new(col, 20) : color.new(color.black, 100))
+        if not na(s.targetLine)
+            line.set_color(s.targetLine, visible ? color.new(col, s.targetHit ? 0 : 30) : color.new(color.black, 100))
+        if not na(s.tagLabel)
+            label.set_textcolor(s.tagLabel, visible ? col : color.new(color.black, 100))
+        if not na(s.targetLabel)
+            label.set_textcolor(s.targetLabel, visible ? col : color.new(color.black, 100))
+        if not na(s.entryLine)
+            line.set_color(s.entryLine, visible ? col : color.new(color.black, 100))
+
+if i_showTable and barstate.islast
+    table.clear(hud, 0, 0, 0, 5)
+
+    chartTF = timeframe.isminutes ? (timeframe.multiplier >= 60 ? str.tostring(math.round(timeframe.multiplier / 60)) + "H" : str.tostring(timeframe.multiplier) + "m") : timeframe.period
+    titleTxt = "Inversion FVG (" + chartTF + ")"
+    
+    headerSize = i_tableTextSize == "Tiny" ? size.small : i_tableTextSize == "Small" ? size.normal : size.normal
+    rowSize    = f_labelSize(i_tableTextSize)
+    
+    table.cell(hud, 0, 0, titleTxt, text_color = color.new(#000000, 0), text_size = headerSize)
+    table.cell(hud, 0, 1, syminfo.ticker, text_color = #000000, text_size = headerSize)
+    table.cell(hud, 0, 2, "Liquidity: " + f_formatTimeframe(i_liqTF), text_color = color.new(#000000, 0), text_size = rowSize)
+
+    thresholdLine = "IFVG Threshold: " + f_thresholdText() + (i_useFvgFilterTF ? " | FVG Filter: " + i_fvgFilterTF : "")
+    table.cell(hud, 0, 3, thresholdLine, text_color = color.new(#000000, 0), text_size = rowSize)
+    table.cell(hud, 0, 4, "Bias: " + i_bias, text_color = color.new(#000000, 0), text_size = rowSize)
+
+    string bottomLine = i_useSession ? f_sessionText() : f_dateText()
+    table.cell(hud, 0, 5, bottomLine, text_color = color.new(#000000, 0), text_size = rowSize)
+
+alertcondition(bslSweptThisBar, title="Buyside Liquidity (BSL) Swept", message="{{ticker}}: Buyside Liquidity swept on {{interval}}")
+alertcondition(sslSweptThisBar, title="Sellside Liquidity (SSL) Swept", message="{{ticker}}: Sellside Liquidity swept on {{interval}}")
+
+bool anyBullishInversionThisBar = false
+bool anyBearishInversionThisBar = false
+bool anyTargetHitThisBar        = false
+bool anyInvalidationThisBar     = false
+
+if array.size(activeIFVGs) > 0
+    for i = 0 to array.size(activeIFVGs) - 1
+        IFVG_Setup s = array.get(activeIFVGs, i)
+        if s.inversionBar == bar_index
+            if s.isBullish
+                anyBullishInversionThisBar := true
+            else
+                anyBearishInversionThisBar := true
+        if s.targetHit and s.targetBarIndex == bar_index
+            anyTargetHitThisBar := true
+        if s.state == "INVALIDATED" and s.invalidBarIndex == bar_index
+            anyInvalidationThisBar := true
+
+alertcondition(anyBullishInversionThisBar, title="+IFVG Inversion Confirmed", message="{{ticker}}: Bullish IFVG (+IFVG) confirmed on {{interval}}")
+alertcondition(anyBearishInversionThisBar, title="-IFVG Inversion Confirmed", message="{{ticker}}: Bearish IFVG (-IFVG) confirmed on {{interval}}")
+alertcondition(anyTargetHitThisBar,        title="IFVG Target Hit",          message="{{ticker}}: IFVG target hit on {{interval}}")
+alertcondition(anyInvalidationThisBar,     title="IFVG Invalidated",         message="{{ticker}}: IFVG invalidated on {{interval}}")
