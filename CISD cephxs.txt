@@ -1,0 +1,671 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © cephxs
+// © fstarcapital
+
+//@version=6
+
+// - - - - - - - - -
+// cephxs / CISD [Ultimate +]
+//
+// Standalone extraction of the advanced CISD (Change In State of Delivery)
+// detection engine from the Universal Po3 Profiler. Built to be reusable /
+// portable into other indicators: the engine below has NO dependency on Po3,
+// SMT, PivotState, or the alert stack — only on chart OHLC + a bias input.
+//
+// PORTING NOTES
+//   • The whole system lives between the two "CISD ENGINE" fences below. Copy
+//     the types, arrays, helpers and the main block; wire BIAS_BULL/BIAS_BEAR
+//     to the host's directional bias and you are done.
+//   • Fibonacci is fully gated by the dev kill switch CISD_FIB_ENGINE (below).
+//     Set it to false to compile-out ALL fib computation & drawing for a port
+//     that doesn't need projections — the fib inputs stay visible but inert.
+// - - - - - - - - -
+
+indicator("cephxs / CISD [base]",
+         shorttitle = "cephxs / CISD [base]",
+         overlay = true,
+         max_lines_count = 500,
+         max_labels_count = 500,
+         calc_bars_count = 3000)
+
+// - - - - - - - - -
+// Input Groups
+string g_general       = "1. ⚙️ General"
+string g_cisd          = "2. 🔥 CISD Detection"
+string g_cisd_fib      = "2.2. 🧪 CISD Fibonacci Projections"
+
+// - - - - - - - - -
+// Constants
+color primBullCol   = #00a2c7
+color primBearCol   = #db5755
+color C_TRANSPARENT = color.new(color.white, 100)
+
+// - - - - - - - - -
+// DEV KILL SWITCH — Fibonacci engine
+// Set to false to completely block ALL Fibonacci computation & drawing (for
+// ports that only need CISD lines). The fib inputs remain visible but do
+// nothing, and no fib code path executes. Keep true to run the full engine.
+const bool CISD_FIB_ENGINE = true
+
+// Minimum spacing between consecutive CISD Fibonacci projections in the SAME
+// direction, on sub-1h charts only. Clustered CISDs would otherwise FIFO-evict a
+// well-placed recent fib; enforcing a gap keeps them scarce like they naturally
+// are on higher timeframes. Per direction — a bullish fib never blocks a bearish
+// one. Applies only when the chart timeframe is under 1 hour.
+const int CISD_FIB_MIN_SPACING_MS = 2 * 60 * 60 * 1000
+
+// Pivot detection is unified at length 1 (most sensitive) so bar indices match
+// between detection and invalidation — required for correct CISD removal.
+int  pivot_len              = 1
+bool pivot_delete_on_cross  = true
+// Confirmed CISDs are cleaned up when price trades back through their pivot.
+bool cisd_invalidate_on_cross = true
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+// ▼▼▼ CISD ENGINE — TYPES ▼▼▼
+// - - - - - - - - -
+
+// CISD Stretch — the initial opposing candle run that precedes the pivot.
+type CISDStretch
+    bool  bullish             // true = bearish stretch preceded a bullish pivot
+    int   origin_bar          // Bar index of stretch origin (furthest back)
+    float level               // Price level (origin open) — the CISD line level
+    int   end_bar             // Bar index of stretch end (closest to pivot)
+    float end_close           // Close price at stretch end
+    float origin_high         // High at origin bar (wick-mode origin side)
+    float origin_low          // Low at origin bar (wick-mode origin side)
+    // True reversal extreme of the WHOLE opposing move (not just the last
+    // opposing candle). For a bullish CISD this is the lowest low; for a
+    // bearish CISD the highest high — including candles that ran past the
+    // opposing body run before the pivot formed. Wick-mode fibs project from it.
+    int   run_ext_bar
+    float run_ext_price
+
+// Pending CISD — awaiting a confirmation candle.
+type PendingCISD
+    CISDStretch stretch
+    int   pivot_bar           // Bar index of the pivot that triggered this CISD
+    int   start_bar           // Bar when pending tracking started
+    line  pending_line        // Dashed line for pending state
+
+// Confirmed CISD — a candle closed beyond the stretch level.
+type ConfirmedCISD
+    CISDStretch stretch
+    int   pivot_bar
+    float pivot_price         // Pivot price level (for invalidation cleanup)
+    int   confirmation_bar
+    line  confirmed_line
+    label confirm_shape
+    bool  is_invalidated = false // Kept for historical display when exhaustive
+
+// Pivot Data — active pivots tracked for CISD invalidation.
+type PivotData
+    int   bar_idx
+    float price
+    bool  is_high
+    bool  has_purge
+
+// Purge Tracking — internal filter for CISD (no visuals).
+type PurgeTracker
+    int   pivot_bar
+    bool  is_high
+    int   purge_bar
+
+// CISD Fibonacci Projection — the fib lines/labels for a confirmed CISD.
+type CISDFibProjection
+    int   cisd_pivot_bar
+    bool  is_bullish
+    array<line>  fib_lines
+    array<label> fib_labels
+    int   confirmation_bar = 0
+    int   confirmation_time = 0    // Chart time (ms) at confirmation — for spacing
+
+// - - - - - - - - -
+// CISD and Pivot Arrays
+var array<PendingCISD>      pending_cisd        = array.new<PendingCISD>()
+var array<ConfirmedCISD>    confirmed_cisd      = array.new<ConfirmedCISD>()
+var array<CISDFibProjection> cisd_fib_projections = array.new<CISDFibProjection>()
+var array<PivotData>        pivot_highs         = array.new<PivotData>()
+var array<PivotData>        pivot_lows          = array.new<PivotData>()
+var array<PurgeTracker>     purge_tracker       = array.new<PurgeTracker>()
+
+// - - - - - - - - -
+// CISD ENGINE — HELPERS (no input dependency; safe to hoist)
+
+// Delete a fib projection's visuals.
+deleteFibProjection(fp) =>
+    if array.size(fp.fib_lines) > 0
+        for i = 0 to array.size(fp.fib_lines) - 1
+            line.delete(array.get(fp.fib_lines, i))
+    if array.size(fp.fib_labels) > 0
+        for i = 0 to array.size(fp.fib_labels) - 1
+            label.delete(array.get(fp.fib_labels, i))
+
+// Remove fib projection(s) linked to a CISD pivot bar, in ONE direction only —
+// a wide-range candle can be a pivot high AND low at once, so both directions
+// can share a pivot bar and a bar-only match would kill the wrong side.
+removeFibProjectionByPivotBar(pivotBar, bool bullish) =>
+    if array.size(cisd_fib_projections) > 0
+        for i = array.size(cisd_fib_projections) - 1 to 0
+            fp = array.get(cisd_fib_projections, i)
+            if fp.cisd_pivot_bar == pivotBar and fp.is_bullish == bullish
+                deleteFibProjection(fp)
+                array.remove(cisd_fib_projections, i)
+
+// Remove any CISD (pending or confirmed) linked to a pivot bar, in ONE
+// direction only. A pivot-high invalidation must clear bearish CISDs alone
+// (bullish = false); a pivot-low invalidation bullish alone (bullish = true).
+removeCISDByPivotBar(pivotBar, bool bullish) =>
+    if array.size(pending_cisd) > 0
+        for i = array.size(pending_cisd) - 1 to 0
+            item = array.get(pending_cisd, i)
+            if item.pivot_bar == pivotBar and item.stretch.bullish == bullish
+                line.delete(item.pending_line)
+                array.remove(pending_cisd, i)
+    if array.size(confirmed_cisd) > 0
+        for i = array.size(confirmed_cisd) - 1 to 0
+            ci = array.get(confirmed_cisd, i)
+            if ci.pivot_bar == pivotBar and ci.stretch.bullish == bullish
+                line.delete(ci.confirmed_line)
+                label.delete(ci.confirm_shape)
+                array.remove(confirmed_cisd, i)
+    removeFibProjectionByPivotBar(pivotBar, bullish)
+
+// Purge match within tolerance. A bullish CISD (from a low pivot) needs a low
+// purge; a bearish CISD (from a high pivot) needs a high purge.
+hasPurgeForCISD(pivotBar, bullishCISD, tolerance) =>
+    bool hasPurge = false
+    if array.size(purge_tracker) > 0
+        for i = 0 to array.size(purge_tracker) - 1
+            pt = array.get(purge_tracker, i)
+            int barDistance = math.abs(pivotBar - pt.purge_bar)
+            if barDistance <= tolerance
+                if bullishCISD and not pt.is_high
+                    hasPurge := true
+                else if not bullishCISD and pt.is_high
+                    hasPurge := true
+    hasPurge
+
+// Propulsion block: a confirming CISD whose run extreme has traded back INTO a
+// previous SAME-direction, still-uninvalidated CISD's order block — the zone
+// between that CISD's line level and its pivot — without breaking the pivot
+// (which would already have removed it). Price dipped to the earlier line, held,
+// and expanded again in the same direction to form this new CISD, propelling off
+// it. Only confirmed CISDs still in the array are scanned, so "uninvalidated" is
+// implicit. The source CISD must have confirmed at or before this CISD's run
+// extreme (age >= 0 — it had to exist for price to trade into it) and within
+// maxAge bars of that extreme (same window as the pending-CISD timeout) — older
+// CISDs are stale and no longer counted. Returns true if this CISD is a
+// propulsion block.
+isPropulsionBlock(bool bullish, float extreme, int extremeBar, int maxAge) =>
+    bool prop = false
+    if array.size(confirmed_cisd) > 0
+        for i = 0 to array.size(confirmed_cisd) - 1
+            ci = array.get(confirmed_cisd, i)
+            int age = extremeBar - ci.confirmation_bar
+            if ci.stretch.bullish == bullish and age >= 0 and age <= maxAge
+                float zTop = math.max(ci.stretch.level, ci.pivot_price)
+                float zBot = math.min(ci.stretch.level, ci.pivot_price)
+                if extreme >= zBot and extreme <= zTop
+                    prop := true
+                    break
+    prop
+
+// Count fib projections in a direction.
+countFibProjections(isBullish) =>
+    int count = 0
+    if array.size(cisd_fib_projections) > 0
+        for i = 0 to array.size(cisd_fib_projections) - 1
+            fp = array.get(cisd_fib_projections, i)
+            if fp.is_bullish == isBullish
+                count += 1
+    count
+
+// Most recent fib confirmation time (ms) in a direction; 0 if none. Scans the
+// live array, so fibs already removed (invalidated / trimmed) don't gate.
+mostRecentFibTime(isBullish) =>
+    int t = 0
+    if array.size(cisd_fib_projections) > 0
+        for i = 0 to array.size(cisd_fib_projections) - 1
+            fp = array.get(cisd_fib_projections, i)
+            if fp.is_bullish == isBullish and fp.confirmation_time > t
+                t := fp.confirmation_time
+    t
+
+// Remove the oldest fib in a direction. Returns true if one was removed.
+removeOldestFibForDir(isBull) =>
+    int idx = -1
+    if array.size(cisd_fib_projections) > 0
+        for i = 0 to array.size(cisd_fib_projections) - 1
+            fp = array.get(cisd_fib_projections, i)
+            if fp.is_bullish == isBull
+                idx := i
+                break
+    if idx >= 0
+        deleteFibProjection(array.get(cisd_fib_projections, idx))
+        array.remove(cisd_fib_projections, idx)
+        true
+    else
+        false
+
+// Enforce max fib projections per direction (FIFO, newest wins).
+enforceFibMax(maxPerDirection) =>
+    while countFibProjections(true) > maxPerDirection
+        if not removeOldestFibForDir(true)
+            break
+    while countFibProjections(false) > maxPerDirection
+        if not removeOldestFibForDir(false)
+            break
+
+// - - - - - - - - -
+// ▲▲▲ CISD ENGINE — HELPERS (continued after inputs) ▲▲▲
+// - - - - - - - - -
+
+// - - - - - - - - -
+// Inputs — General
+string cisd_bias = input.string('Auto', '🔥 CISD Directional Bias', options = ['Auto', 'Bullish', 'Bearish'], group = g_general, tooltip = "Filter CISD detection by direction.\nAuto: detect both bullish and bearish.\nBullish: only bullish CISD.\nBearish: only bearish CISD.")
+
+// - - - - - - - - -
+// Inputs — CISD Detection
+bool  inp_cisd_show    = input.bool(true, '🔥 Show CISD     ', inline = 'cisd_main', group = g_cisd)
+color cisd_color_bull  = input.color(color.new(primBullCol, 0), '', inline = 'cisd_main', group = g_cisd, active = inp_cisd_show)
+color cisd_color_bear  = input.color(color.new(primBearCol, 0), '', inline = 'cisd_main', group = g_cisd, active = inp_cisd_show)
+int   cisd_offset      = input.int(2, '', minval = 0, maxval = 20, inline = 'cisd_main', group = g_cisd, active = inp_cisd_show, tooltip = "Toggle: Show CISD lines.\nColors: Bullish / Bearish.\nOffset: Bars to extend line.")
+
+string cisd_sensitivity = input.string('Standard', 'CISD Sensitivity', options = ['Standard', 'Max'], group = g_cisd, tooltip = "How many bars a pending CISD waits for a confirmation candle to close beyond the stretch level.\nStandard: 10 bar timeout.\nMax: 20 bar timeout (catches slower confirmations).", active = inp_cisd_show)
+int    cisd_pending_timeout = cisd_sensitivity == 'Standard' ? 10 : 20
+bool   cisd_size_filter = input.bool(true, 'CISD Size Filter', inline = 'cisd_size', group = g_cisd, active = inp_cisd_show)
+string cisd_size_preset = input.string('Regular', '', options = ['Really small', 'Small', 'Regular', 'Sizeable', 'Juicy'], inline = 'cisd_size', group = g_cisd, active = inp_cisd_show and cisd_size_filter, tooltip = "Toggle: Filter out small CISDs using ATR(14).\nPreset: Minimum stretch size relative to ATR.\nSmaller presets catch more CISDs. Larger presets only show significant moves.")
+bool   cisd_exhaustive  = input.bool(false, 'Show All Historical CISD?', group = g_cisd, tooltip = "When this setting is on, invalidated CISDs stay on the chart as dashed lines.", active = inp_cisd_show)
+bool   cisd_purge_filter = input.bool(false, 'Filter by Purge', inline = 'cisd_purge', group = g_cisd, active = inp_cisd_show)
+int    cisd_purge_tolerance = input.int(5, '', minval = 1, maxval = 50, inline = 'cisd_purge', group = g_cisd, active = inp_cisd_show and cisd_purge_filter, tooltip = "Toggle: Only create CISD after matching purge.\nTolerance: Max bars between pivot and purge.")
+
+// - - - - - - - - -
+// Inputs — CISD Fibonacci Projections  (all inert when CISD_FIB_ENGINE = false)
+bool   cisd_fib_show_raw = input.bool(false, '🧪 Show Fibonacci Projections', group = g_cisd_fib, tooltip = "Draw Fibonacci extension levels from the CISD stretch.\nDev note: master-gated by the CISD_FIB_ENGINE kill switch in code.", active = inp_cisd_show)
+string cisd_fib_mode   = input.string('Body', 'Calculate From', options = ['Body', 'Wick'], group = g_cisd_fib, tooltip = "Use candle bodies or wicks for Fibonacci calculations.\nWick mode projects from the TRUE peak/trough of the whole opposing move.", active = inp_cisd_show and cisd_fib_show_raw)
+int    cisd_fib_max    = input.int(5, 'Max Fibs Per Direction', minval = 1, maxval = 10, group = g_cisd_fib, tooltip = "Maximum number of CISD Fibonacci projections to show per direction (bullish/bearish).", active = inp_cisd_show and cisd_fib_show_raw)
+
+// Fib level toggles with colors (0 and 1 are always shown as reference).
+color cisd_fib_n05_color = input.color(color.new(#4a4a4a, 0), '', inline = 'fib_n05', group = g_cisd_fib, active = inp_cisd_show and cisd_fib_show_raw)
+bool  cisd_fib_n05       = input.bool(false, '-0.5', inline = 'fib_n05', group = g_cisd_fib, active = inp_cisd_show and cisd_fib_show_raw)
+color cisd_fib_n10_color = input.color(color.new(#4a4a4a, 0), '', inline = 'fib_n05', group = g_cisd_fib, active = inp_cisd_show and cisd_fib_show_raw)
+bool  cisd_fib_n10       = input.bool(false, '-1   ', inline = 'fib_n05', group = g_cisd_fib, active = inp_cisd_show and cisd_fib_show_raw)
+color cisd_fib_n15_color = input.color(color.new(#4a4a4a, 0), '', inline = 'fib_n05', group = g_cisd_fib, active = inp_cisd_show and cisd_fib_show_raw)
+bool  cisd_fib_n15       = input.bool(false, '-1.5', inline = 'fib_n05', group = g_cisd_fib, active = inp_cisd_show and cisd_fib_show_raw)
+
+color cisd_fib_n20_color = input.color(color.new(#4a4a4a, 0), '', inline = 'fib_n20', group = g_cisd_fib, active = inp_cisd_show and cisd_fib_show_raw)
+bool  cisd_fib_n20       = input.bool(true, '-2 ', inline = 'fib_n20', group = g_cisd_fib, active = inp_cisd_show and cisd_fib_show_raw)
+color cisd_fib_n25_color = input.color(color.new(primBearCol, 0), '', inline = 'fib_n20', group = g_cisd_fib, active = inp_cisd_show and cisd_fib_show_raw)
+bool  cisd_fib_n25       = input.bool(true, '-2.5  ', inline = 'fib_n20', group = g_cisd_fib, active = inp_cisd_show and cisd_fib_show_raw)
+color cisd_fib_n30_color = input.color(color.new(#4a4a4a, 0), '', inline = 'fib_n20', group = g_cisd_fib, active = inp_cisd_show and cisd_fib_show_raw)
+bool  cisd_fib_n30       = input.bool(false, '-3  ', inline = 'fib_n20', group = g_cisd_fib, active = inp_cisd_show and cisd_fib_show_raw)
+
+color cisd_fib_n35_color = input.color(color.new(#4a4a4a, 0), '', inline = 'fib_n35', group = g_cisd_fib, active = inp_cisd_show and cisd_fib_show_raw)
+bool  cisd_fib_n35       = input.bool(false, '-3.5', inline = 'fib_n35', group = g_cisd_fib, active = inp_cisd_show and cisd_fib_show_raw)
+color cisd_fib_n40_color = input.color(color.new(primBearCol, 0), '', inline = 'fib_n35', group = g_cisd_fib, active = inp_cisd_show and cisd_fib_show_raw)
+bool  cisd_fib_n40       = input.bool(true, '-4   ', inline = 'fib_n35', group = g_cisd_fib, active = inp_cisd_show and cisd_fib_show_raw)
+color cisd_fib_n45_color = input.color(color.new(#4a4a4a, 0), '', inline = 'fib_n35', group = g_cisd_fib, active = inp_cisd_show and cisd_fib_show_raw)
+bool  cisd_fib_n45       = input.bool(true, '-4.5 ', inline = 'fib_n35', group = g_cisd_fib, active = inp_cisd_show and cisd_fib_show_raw)
+
+// Master fib gate — user toggle AND dev kill switch.
+bool cisd_fib_show = CISD_FIB_ENGINE and cisd_fib_show_raw
+
+// - - - - - - - - -
+// Resolved bias
+var bool BIAS_BEAR = cisd_bias == 'Auto' or cisd_bias == 'Bearish'
+var bool BIAS_BULL = cisd_bias == 'Auto' or cisd_bias == 'Bullish'
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+// ▼▼▼ CISD ENGINE — CORE FUNCTIONS ▼▼▼
+// - - - - - - - - -
+
+// Candle direction helpers
+isBullBody(i) => close[i] > open[i]
+isBearBody(i) => close[i] < open[i]
+
+// CISD ATR + size preset
+float cisd_atr = ta.atr(14)
+getCISDMinATRMult(preset) =>
+    preset == 'Really small' ? 0.1 : preset == 'Small' ? 0.25 : preset == 'Sizeable' ? 0.66 : preset == 'Juicy' ? 1.0 : 0.5
+
+// Compute the initial opposing stretch for a new pivot.
+// Returns: [originOffset, level, endOffset, endClose, passesFilter,
+//           originHigh, originLow, runExtOffset, runExtPrice]
+// Walks back through same-direction candles to find the opposing run, then
+// scans the whole origin→pivot span for the TRUE reversal extreme (run_ext).
+computeInitialStretch(bullishPivot, pivotOffset, sizeFilter, atrMult) =>
+    maxScan = 300
+    if bullishPivot
+        // Bullish pivot (from a low): need a bearish stretch before it.
+        // Phase 1: walk back to the FIRST bear candle (skip bull/doji after pivot).
+        endOffset = -1
+        for k = pivotOffset to pivotOffset + maxScan
+            if isBearBody(k)
+                endOffset := k
+                break
+        if endOffset == -1
+            [0, 0.0, 0, 0.0, false, 0.0, 0.0, 0, 0.0]
+        else
+            // Phase 2: continue back through consecutive bear candles.
+            originOffset = endOffset
+            for k = endOffset + 1 to endOffset + maxScan
+                if isBearBody(k)
+                    originOffset := k
+                else
+                    break
+            // Run extreme: lowest low across the whole origin→pivot span.
+            int   runExtOff = pivotOffset
+            float runExtLow = low[pivotOffset]
+            for k = pivotOffset to originOffset
+                if low[k] < runExtLow
+                    runExtLow := low[k]
+                    runExtOff := k
+            stretchBodySize = math.abs(open[originOffset] - close[endOffset])
+            minStretchSize  = cisd_atr * atrMult
+            passesFilter    = sizeFilter ? stretchBodySize >= minStretchSize : true
+            [originOffset, open[originOffset], endOffset, close[endOffset], passesFilter, high[originOffset], low[originOffset], runExtOff, runExtLow]
+    else
+        // Bearish pivot (from a high): need a bullish stretch before it.
+        endOffset = -1
+        for k = pivotOffset to pivotOffset + maxScan
+            if isBullBody(k)
+                endOffset := k
+                break
+        if endOffset == -1
+            [0, 0.0, 0, 0.0, false, 0.0, 0.0, 0, 0.0]
+        else
+            originOffset = endOffset
+            for k = endOffset + 1 to endOffset + maxScan
+                if isBullBody(k)
+                    originOffset := k
+                else
+                    break
+            // Run extreme: highest high across the whole origin→pivot span.
+            int   runExtOff  = pivotOffset
+            float runExtHigh = high[pivotOffset]
+            for k = pivotOffset to originOffset
+                if high[k] > runExtHigh
+                    runExtHigh := high[k]
+                    runExtOff  := k
+            stretchBodySize = math.abs(open[originOffset] - close[endOffset])
+            minStretchSize  = cisd_atr * atrMult
+            passesFilter    = sizeFilter ? stretchBodySize >= minStretchSize : true
+            [originOffset, open[originOffset], endOffset, close[endOffset], passesFilter, high[originOffset], low[originOffset], runExtOff, runExtHigh]
+
+// Recompute a pending CISD's stretch if the opposing move extends this bar.
+// Returns: [updated, originBar, level, endBar, endClose, runExtBar, runExtPrice]
+recomputeStretchIfExtended(PendingCISD p) =>
+    _bull = p.stretch.bullish
+    if _bull and isBearBody(0) and close < p.stretch.end_close
+        float newExtPx  = math.min(p.stretch.run_ext_price, low)
+        int   newExtBar = low < p.stretch.run_ext_price ? bar_index : p.stretch.run_ext_bar
+        [true, p.stretch.origin_bar, p.stretch.level, bar_index, close, newExtBar, newExtPx]
+    else if (not _bull) and isBullBody(0) and close > p.stretch.end_close
+        float newExtPx  = math.max(p.stretch.run_ext_price, high)
+        int   newExtBar = high > p.stretch.run_ext_price ? bar_index : p.stretch.run_ext_bar
+        [true, p.stretch.origin_bar, p.stretch.level, bar_index, close, newExtBar, newExtPx]
+    else
+        [false, p.stretch.origin_bar, p.stretch.level, p.stretch.end_bar, p.stretch.end_close, p.stretch.run_ext_bar, p.stretch.run_ext_price]
+
+// Draw one CISD fib level (line + label).
+drawCisdFibLevel(bool enabled, float multiplier, color lvlColor, string lvlText, int startBar, int endBar, float endPrice, float fibDirection, color transpColor, array<line> fibLines, array<label> fibLabels) =>
+    if enabled
+        float price = endPrice + (fibDirection * multiplier)
+        ln  = line.new(startBar, price, endBar, price, color = lvlColor, style = line.style_solid, width = 1)
+        array.push(fibLines, ln)
+        if lvlText != ''
+            lbl = label.new(startBar, price, lvlText, color = transpColor, style = label.style_label_right, textcolor = lvlColor, size = size.tiny, textalign = text.align_center)
+            array.push(fibLabels, lbl)
+
+// Render Fibonacci projections for a confirmed CISD.
+//   Bullish CISD = bearish stretch (down), fibs project UPWARD.
+//   Bearish CISD = bullish stretch (up),  fibs project DOWNWARD.
+//   Wick mode projects the end side from run_ext (true peak/trough of the move).
+renderCISDFibs(ci, useWick) =>
+    CISDFibProjection result = na
+    bool isBullishCISD = ci.stretch.bullish
+
+    float originPrice = na
+    float endPrice    = na
+    if useWick
+        if isBullishCISD
+            originPrice := ci.stretch.origin_high
+            endPrice    := ci.stretch.run_ext_price   // true trough of whole opposing move
+        else
+            originPrice := ci.stretch.origin_low
+            endPrice    := ci.stretch.run_ext_price   // true peak of whole opposing move
+    else
+        originPrice := ci.stretch.level
+        endPrice    := ci.stretch.end_close
+
+    float stretchRange = endPrice - originPrice
+    float fibDirection = -stretchRange   // extensions go opposite the stretch
+
+    int startBar = ci.stretch.origin_bar
+    int endBar   = ci.confirmation_bar
+
+    array<line>  fibLines  = array.new<line>()
+    array<label> fibLabels = array.new<label>()
+
+    color transpColor = color.new(#ffffff, 100)
+    color refColor    = color.new(#4a4a4a, 50)
+
+    // Reference levels 0 and 1 (always drawn, reduced opacity).
+    drawCisdFibLevel(true, 0.0, refColor, '', startBar, endBar, endPrice, fibDirection, transpColor, fibLines, fibLabels)
+    drawCisdFibLevel(true, 1.0, refColor, '', startBar, endBar, endPrice, fibDirection, transpColor, fibLines, fibLabels)
+
+    // Configurable extension levels.
+    drawCisdFibLevel(cisd_fib_n05, 1.5, cisd_fib_n05_color, '-0.5', startBar, endBar, endPrice, fibDirection, transpColor, fibLines, fibLabels)
+    drawCisdFibLevel(cisd_fib_n10, 2.0, cisd_fib_n10_color, '-1', startBar, endBar, endPrice, fibDirection, transpColor, fibLines, fibLabels)
+    drawCisdFibLevel(cisd_fib_n15, 2.5, cisd_fib_n15_color, '-1.5', startBar, endBar, endPrice, fibDirection, transpColor, fibLines, fibLabels)
+    drawCisdFibLevel(cisd_fib_n20, 3.0, cisd_fib_n20_color, '-2', startBar, endBar, endPrice, fibDirection, transpColor, fibLines, fibLabels)
+    drawCisdFibLevel(cisd_fib_n25, 3.5, cisd_fib_n25_color, '-2.5', startBar, endBar, endPrice, fibDirection, transpColor, fibLines, fibLabels)
+    drawCisdFibLevel(cisd_fib_n30, 4.0, cisd_fib_n30_color, '-3', startBar, endBar, endPrice, fibDirection, transpColor, fibLines, fibLabels)
+    drawCisdFibLevel(cisd_fib_n35, 4.5, cisd_fib_n35_color, '-3.5', startBar, endBar, endPrice, fibDirection, transpColor, fibLines, fibLabels)
+    drawCisdFibLevel(cisd_fib_n40, 5.0, cisd_fib_n40_color, '-4', startBar, endBar, endPrice, fibDirection, transpColor, fibLines, fibLabels)
+    drawCisdFibLevel(cisd_fib_n45, 5.5, cisd_fib_n45_color, '-4.5', startBar, endBar, endPrice, fibDirection, transpColor, fibLines, fibLabels)
+
+    result := CISDFibProjection.new(ci.pivot_bar, isBullishCISD, fibLines, fibLabels, confirmation_bar = ci.confirmation_bar, confirmation_time = time)
+    result
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+// ▼▼▼ CISD ENGINE — MAIN (pivot detection + CISD lifecycle) ▼▼▼
+// - - - - - - - - -
+
+float pivotHigh          = ta.pivothigh(pivot_len, pivot_len)
+float pivotLow           = ta.pivotlow(pivot_len, pivot_len)
+float cisd_atr_mult      = getCISDMinATRMult(cisd_size_preset)
+
+// Register a detected pivot for CISD tracking / invalidation.
+addPivot(float level, float price, bool isHigh, array<PivotData> arr) =>
+    if bool(level)
+        array.push(arr, PivotData.new(bar_index - pivot_len, price, isHigh, false))
+
+addPivot(pivotHigh, high[pivot_len], true,  pivot_highs)
+addPivot(pivotLow,  low[pivot_len],  false, pivot_lows)
+
+// PIVOT HIGH INVALIDATION (price crosses through) → track purge, drop CISD.
+if pivot_delete_on_cross and array.size(pivot_highs) > 0
+    for i = array.size(pivot_highs) - 1 to 0
+        pd = array.get(pivot_highs, i)
+        if high > pd.price
+            pt = PurgeTracker.new(pd.bar_idx, true, bar_index)
+            array.push(purge_tracker, pt)
+            pd.has_purge := true
+            array.remove(pivot_highs, i)
+            if inp_cisd_show
+                if cisd_exhaustive
+                    // Bearish CISDs only — the pivot LOW side of the same bar
+                    // may carry a live bullish CISD that this cross doesn't touch.
+                    if array.size(confirmed_cisd) > 0
+                        for j = array.size(confirmed_cisd) - 1 to 0
+                            ci = array.get(confirmed_cisd, j)
+                            if ci.pivot_bar == pd.bar_idx and not ci.stretch.bullish and not ci.is_invalidated
+                                ci.is_invalidated := true
+                                line.set_style(ci.confirmed_line, line.style_dashed)
+                                line.set_width(ci.confirmed_line, 1)
+                    if array.size(pending_cisd) > 0
+                        for j = array.size(pending_cisd) - 1 to 0
+                            item = array.get(pending_cisd, j)
+                            if item.pivot_bar == pd.bar_idx and not item.stretch.bullish
+                                line.delete(item.pending_line)
+                                array.remove(pending_cisd, j)
+                else
+                    removeCISDByPivotBar(pd.bar_idx, false)
+
+// PIVOT LOW INVALIDATION (price crosses through) → track purge, drop CISD.
+if pivot_delete_on_cross and array.size(pivot_lows) > 0
+    for i = array.size(pivot_lows) - 1 to 0
+        pd = array.get(pivot_lows, i)
+        if low < pd.price
+            pt = PurgeTracker.new(pd.bar_idx, false, bar_index)
+            array.push(purge_tracker, pt)
+            pd.has_purge := true
+            array.remove(pivot_lows, i)
+            if inp_cisd_show
+                if cisd_exhaustive
+                    // Bullish CISDs only — mirror of the pivot-high block above.
+                    if array.size(confirmed_cisd) > 0
+                        for j = array.size(confirmed_cisd) - 1 to 0
+                            ci = array.get(confirmed_cisd, j)
+                            if ci.pivot_bar == pd.bar_idx and ci.stretch.bullish and not ci.is_invalidated
+                                ci.is_invalidated := true
+                                line.set_style(ci.confirmed_line, line.style_dashed)
+                                line.set_width(ci.confirmed_line, 1)
+                    if array.size(pending_cisd) > 0
+                        for j = array.size(pending_cisd) - 1 to 0
+                            item = array.get(pending_cisd, j)
+                            if item.pivot_bar == pd.bar_idx and item.stretch.bullish
+                                line.delete(item.pending_line)
+                                array.remove(pending_cisd, j)
+                else
+                    removeCISDByPivotBar(pd.bar_idx, true)
+
+// CONFIRMED CISD INVALIDATION (price crosses back through the creation pivot).
+if inp_cisd_show and cisd_invalidate_on_cross and array.size(confirmed_cisd) > 0
+    for i = array.size(confirmed_cisd) - 1 to 0
+        ci = array.get(confirmed_cisd, i)
+        if ci.is_invalidated
+            continue
+        bool shouldRemove = false
+        if ci.stretch.bullish and low < ci.pivot_price
+            shouldRemove := true
+        else if not ci.stretch.bullish and high > ci.pivot_price
+            shouldRemove := true
+        if shouldRemove
+            if cisd_exhaustive
+                ci.is_invalidated := true
+                line.set_style(ci.confirmed_line, line.style_dashed)
+                line.set_width(ci.confirmed_line, 1)
+                removeFibProjectionByPivotBar(ci.pivot_bar, ci.stretch.bullish)
+            else
+                line.delete(ci.confirmed_line)
+                label.delete(ci.confirm_shape)
+                array.remove(confirmed_cisd, i)
+                removeFibProjectionByPivotBar(ci.pivot_bar, ci.stretch.bullish)
+
+// CISD DETECTION — Pivot High creates a bearish CISD.
+if inp_cisd_show and bool(pivotHigh) and BIAS_BEAR
+    [originOff, lvl, endOff, endCls, stretchPassesFilter, origH, origL, runExtOff, runExtPx] = computeInitialStretch(false, pivot_len, cisd_size_filter, cisd_atr_mult)
+    origin_bar  = bar_index - originOff
+    end_bar     = bar_index - endOff
+    run_ext_bar = bar_index - runExtOff
+    pivot_bar   = bar_index - pivot_len
+    purge_ok    = not cisd_purge_filter or hasPurgeForCISD(pivot_bar, false, cisd_purge_tolerance)
+    if stretchPassesFilter and purge_ok
+        // Newest-wins: evict any same-direction pending incumbent, then create.
+        if array.size(pending_cisd) > 0
+            for ii = array.size(pending_cisd) - 1 to 0
+                it = array.get(pending_cisd, ii)
+                if not it.stretch.bullish
+                    line.delete(it.pending_line)
+                    array.remove(pending_cisd, ii)
+        ln = line.new(origin_bar, lvl, bar_index, lvl, color = cisd_color_bear, style = line.style_dotted, width = 1)
+        st = CISDStretch.new(false, origin_bar, lvl, end_bar, endCls, origH, origL, run_ext_bar, runExtPx)
+        array.push(pending_cisd, PendingCISD.new(st, pivot_bar, bar_index, ln))
+
+// CISD DETECTION — Pivot Low creates a bullish CISD.
+if inp_cisd_show and bool(pivotLow) and BIAS_BULL
+    [originOffB, lvlB, endOffB, endClsB, stretchPassesFilterB, origHB, origLB, runExtOffB, runExtPxB] = computeInitialStretch(true, pivot_len, cisd_size_filter, cisd_atr_mult)
+    origin_bar_b  = bar_index - originOffB
+    end_bar_b     = bar_index - endOffB
+    run_ext_bar_b = bar_index - runExtOffB
+    pivot_bar_b   = bar_index - pivot_len
+    purge_ok_b    = not cisd_purge_filter or hasPurgeForCISD(pivot_bar_b, true, cisd_purge_tolerance)
+    if stretchPassesFilterB and purge_ok_b
+        // Newest-wins: evict any same-direction pending incumbent, then create.
+        if array.size(pending_cisd) > 0
+            for ii = array.size(pending_cisd) - 1 to 0
+                it = array.get(pending_cisd, ii)
+                if it.stretch.bullish
+                    line.delete(it.pending_line)
+                    array.remove(pending_cisd, ii)
+        lnB = line.new(origin_bar_b, lvlB, bar_index, lvlB, color = cisd_color_bull, style = line.style_dotted, width = 1)
+        stB = CISDStretch.new(true, origin_bar_b, lvlB, end_bar_b, endClsB, origHB, origLB, run_ext_bar_b, runExtPxB)
+        array.push(pending_cisd, PendingCISD.new(stB, pivot_bar_b, bar_index, lnB))
+
+// CISD RUNTIME — process pending CISDs (timeout, extend, confirm).
+if inp_cisd_show and array.size(pending_cisd) > 0
+    for i = array.size(pending_cisd) - 1 to 0
+        p = array.get(pending_cisd, i)
+        // Timeout
+        if bar_index - p.start_bar >= cisd_pending_timeout
+            line.delete(p.pending_line)
+            array.remove(pending_cisd, i)
+            continue
+        // Extend stretch if the opposing move continued this bar
+        [updated, new_origin_bar, new_level, new_end_bar, new_end_close, new_run_ext_bar, new_run_ext_price] = recomputeStretchIfExtended(p)
+        if updated
+            line.set_x1(p.pending_line, new_origin_bar)
+            line.set_y1(p.pending_line, new_level)
+            line.set_y2(p.pending_line, new_level)
+            p.stretch.origin_bar    := new_origin_bar
+            p.stretch.level         := new_level
+            p.stretch.end_bar       := new_end_bar
+            p.stretch.end_close     := new_end_close
+            p.stretch.run_ext_bar   := new_run_ext_bar
+            p.stretch.run_ext_price := new_run_ext_price
+            array.set(pending_cisd, i, p)
+        line.set_x2(p.pending_line, bar_index)
+        // Confirmation: close beyond the stretch level.
+        confirm_ok = p.stretch.bullish ? close > p.stretch.level : close < p.stretch.level
+        if confirm_ok
+            x1_c = p.stretch.origin_bar
+            x2_c = bar_index + cisd_offset
+            y_c  = p.stretch.level
+            // Propulsion block: run extreme traded into a prior same-direction
+            // CISD's zone → thin 1px line (keeps bull/bear color) and no fibs below.
+            bool isProp = isPropulsionBlock(p.stretch.bullish, p.stretch.run_ext_price, p.stretch.run_ext_bar, cisd_pending_timeout)
+            cisdColor = p.stretch.bullish ? cisd_color_bull : cisd_color_bear
+            ln_c = line.new(x1_c, y_c, x2_c, y_c, color = cisdColor, style = line.style_solid, width = isProp ? 1 : 2)
+            yloc_ = p.stretch.bullish ? yloc.belowbar : yloc.abovebar
+            shp = label.new(bar_index, close, style = label.style_circle, text = '', size = size.auto, color = C_TRANSPARENT, textcolor = cisdColor, yloc = yloc_)
+            float pivotPriceForCISD = p.stretch.bullish ? low[bar_index - p.pivot_bar] : high[bar_index - p.pivot_bar]
+            ci = ConfirmedCISD.new(p.stretch, p.pivot_bar, pivotPriceForCISD, bar_index, ln_c, shp)
+            array.push(confirmed_cisd, ci)
+            // Fibonacci projections — gated by the CISD_FIB_ENGINE kill switch.
+            // Propulsion blocks draw no fibs (same rule as EntryCalc).
+            // On sub-1h charts, enforce a per-direction spacing gap so clustered
+            // CISDs don't FIFO-evict a well-placed recent fib.
+            if cisd_fib_show and not isProp
+                bool fib_spacing_ok = true
+                if timeframe.in_seconds() < 3600
+                    int lastFibTime = mostRecentFibTime(p.stretch.bullish)
+                    if lastFibTime > 0 and time - lastFibTime < CISD_FIB_MIN_SPACING_MS
+                        fib_spacing_ok := false
+                if fib_spacing_ok
+                    useWick = cisd_fib_mode == 'Wick'
+                    fibProj = renderCISDFibs(ci, useWick)
+                    if not na(fibProj)
+                        array.push(cisd_fib_projections, fibProj)
+                        enforceFibMax(cisd_fib_max)
+            line.delete(p.pending_line)
+            array.remove(pending_cisd, i)
+
+// Cleanup old purge trackers (keep only last 100)
+while array.size(purge_tracker) > 100
+    array.shift(purge_tracker)
+
+// - - - - - - - - -
+// ▲▲▲ CISD ENGINE — END ▲▲▲

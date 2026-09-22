@@ -1,0 +1,1056 @@
+//==============================================================================
+// GXV SMT_Divergences[LITE✦]
+//==============================================================================
+// © 2026 Gregorius_XV. All rights reserved.
+// Author / Canonical TradingView Publisher: Gregorius_XV
+//
+// Original GXV SMT_Divergences[LITE✦] implementation, including the SMT range
+// reconstruction model, deterministic range-key logic, cleanup authority model,
+// Auto Session behavior, and Aesthetic Bypass visual system.
+//
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0:
+// https://mozilla.org/MPL/2.0/
+//
+// Attribution notice:
+// Redistribution, forks, derivatives, ports, or modified publications based on this
+// source must preserve visible credit to Gregorius_XV as the original author.
+// Do not remove this header or misrepresent authorship of the original work.
+//==============================================================================
+
+//@version=6
+indicator("✦ GXV SMT Divergences-Lite", overlay=true, max_labels_count=500, max_lines_count=500, max_bars_back=5000)
+import GXVSanctuary/AssetCorrelationUtils/5 as GXV
+
+//==============================================================================
+// Release identity / canonical author fingerprint
+//==============================================================================
+const string GXV_SMT_AUTHOR = "Gregorius_XV"
+const string GXV_SMT_CANONICAL_PUBLISHER = "TradingView: Gregorius_XV"
+const string GXV_SMT_RELEASE_NAME = "✦ GXV SMT Divergences-Lite"
+const string GXV_SMT_RELEASE_VERSION = "v2.1.0"
+const string GXV_SMT_RELEASE_DATE = "2026-08-17"
+const string GXV_SMT_LICENSE = "MPL-2.0"
+const string GXV_SMT_AUTHOR_FINGERPRINT = "GXV-SMT-LITE::ORIGINAL::GREGORIUS_XV::2026-07-08::v1.0.0"
+
+//==============================================================================
+// Inputs — GXV normal SMT module subset
+//==============================================================================
+g_smt = "SMT Visual Settings"
+g_smt_gates = "SMT Gates Settings"
+g_smt_ranks = "SMT Render Settings"
+g_smt_sessions = "SMT Session Filter Settings"
+g_smt_assets = "SMT Asset Pair Resolver Settings"
+
+const string TIP_DYNAMIC_SMT_LABELS = "When enabled, hides SMT labels on the exact chart timeframe used as that SMT family's maximum calculation gate. 3M and 12M labels are excluded."
+const string TIP_DISPLAY_CAP = "Maximum retained SMTs per timeframe, pair, and direction bucket."
+const string TIP_NEARBY_ONLY = "Shows only SMTs whose endpoint is within the latest chart bars."
+const string TIP_CLEANUP = "Controls conflict handling. All removes lower-priority conflicts; Bypass modes keep conflicts but fade the bypassed SMT; None disables cleanup."
+const string TIP_AESTHETIC_BYPASS = "In Bypass cleanup modes, keeps conflicting SMTs visible with lower contrast instead of fully removing them."
+const string TIP_BYPASS_LABELS = "Shows labels on faded bypassed SMTs. Turn off for cleaner charts."
+const string TIP_SESSION_FILTER = "Filters SNTs using Sessions time windows"
+const string TIP_AUTO_SESSION = "Automatically selects one session from the latest chart candle time. Timing fields are locked while Auto is on, but their stored values are still used."
+const string TIP_MANUAL_PAIRS = "Manual Pairs inputs are for correlated assets. Current Asset is fetched from current chart asset."
+
+
+smt_txt_all = input.color(#4a4a4a, "SMT Text", inline="smt_txt", group=g_smt)
+smt_label_style = input.string("TF + Asset", "SMT Label Style", options=["TF + Asset", "Asset Only", "TF Only"], group=g_smt)
+smt_label_size = input.string(size.tiny, "SMT Labels Size", options=[size.tiny, size.small, size.normal, size.large, size.huge], group=g_smt)
+smt_labels_show = input.bool(true, "SMT Labels?", group=g_smt)
+smt_dynamic_labels = input.bool(true, "Dynamic SMT Labels?", group=g_smt, tooltip=TIP_DYNAMIC_SMT_LABELS)
+
+smt_render_nearby_only = input.bool(false, "Render Gate?  ", group=g_smt_gates, tooltip=TIP_NEARBY_ONLY, inline='renderbars')
+smt_nearby_bars = input.int(400, " ", minval=1, maxval=5000, group=g_smt_gates, active=smt_render_nearby_only, inline='renderbars')
+smt_history_limit = input.int(20, "Display Cap", minval=1, maxval=100, group=g_smt_gates)
+smt_monthly_min_tf = input.string("1 Hour", "Monthly SMTs TF ≥.", options=["None", "1 Hour", "4 Hour", "1 Day"], group=g_smt_gates)
+
+smt_15m_show = input.bool(false, "15m", inline="smt_r1", group=g_smt_ranks)
+smt_15m_clr = input.color(#dbdbdb, "", inline="smt_r1", group=g_smt_ranks)
+smt_30m_show = input.bool(false, "30m", inline="smt_r1", group=g_smt_ranks)
+smt_30m_clr = input.color(#dbdbdb, "", inline="smt_r1", group=g_smt_ranks)
+smt_1h_show = input.bool(true, "1H ", inline="smt_r1", group=g_smt_ranks)
+smt_1h_clr = input.color(#dbdbdb, "", inline="smt_r1", group=g_smt_ranks)
+smt_90m_show = input.bool(true, "90m", inline="smt_r1", group=g_smt_ranks)
+smt_90m_clr = input.color(#dbdbdb, "", inline="smt_r1", group=g_smt_ranks)
+smt_4h_show = input.bool(true, "4H ", inline="smt_r2", group=g_smt_ranks)
+smt_4h_clr = input.color(#dbdbdb, "", inline="smt_r2", group=g_smt_ranks)
+smt_6h_show = input.bool(false, "6H ", inline="smt_r2", group=g_smt_ranks)
+smt_6h_clr = input.color(#dbdbdb, "", inline="smt_r2", group=g_smt_ranks)
+smt_7h_show = input.bool(true, "7H ", inline="smt_r2", group=g_smt_ranks)
+smt_7h_clr = input.color(#dbdbdb, "", inline="smt_r2", group=g_smt_ranks)
+smt_12h_show = input.bool(true, "12H", inline="smt_r2", group=g_smt_ranks)
+smt_12h_clr = input.color(#dbdbdb, "", inline="smt_r2", group=g_smt_ranks)
+smt_1d_show = input.bool(true, "1D ", inline="smt_r3", group=g_smt_ranks)
+smt_1d_clr = input.color(#b8b8b8, "", inline="smt_r3", group=g_smt_ranks)
+smt_1w_show = input.bool(true, "1W ", inline="smt_r3", group=g_smt_ranks)
+smt_1w_clr = input.color(#b8b8b8, "", inline="smt_r3", group=g_smt_ranks)
+smt_1m_show = input.bool(false, "1M ", inline="smt_r3", group=g_smt_ranks)
+smt_1m_clr = input.color(#9c9c9c, "", inline="smt_r3", group=g_smt_ranks)
+smt_3m_show = input.bool(false, "3M ", inline="smt_r3", group=g_smt_ranks)
+smt_3m_clr = input.color(#636363, "", inline="smt_r3", group=g_smt_ranks)
+smt_12m_show = input.bool(false, "12M", inline="smt_r4", group=g_smt_ranks)
+smt_12m_clr = input.color(#2e2e2e, "", inline="smt_r4", group=g_smt_ranks)
+
+smt_line_style_input = input.string("___", "SMT Line Style", options=["___", "----", "...."], group=g_smt_ranks)
+smt_line_style = smt_line_style_input == "----" ? line.style_dashed : smt_line_style_input == "...." ? line.style_dotted : line.style_solid
+smt_cleanup_mode = input.string("All", "SMT Cleanup", options=["All", "Bypass Pivot A", "Bypass Pivot B", "Bypass Inside Range", "None"], group=g_smt_ranks, tooltip=TIP_CLEANUP)
+smt_aesthetic_bypass = input.bool(true, "Aesthetic Bypass?", inline="smt_bypass", group=g_smt_ranks, active=smt_cleanup_mode == "Bypass Pivot A" or smt_cleanup_mode == "Bypass Pivot B" or smt_cleanup_mode == "Bypass Inside Range", tooltip=TIP_AESTHETIC_BYPASS)
+smt_bypass_labels_show = input.bool(false, "Bypass Labels?", inline="smt_bypass", group=g_smt_ranks, active=smt_aesthetic_bypass and (smt_cleanup_mode == "Bypass Pivot A" or smt_cleanup_mode == "Bypass Pivot B" or smt_cleanup_mode == "Bypass Inside Range"), tooltip=TIP_BYPASS_LABELS)
+smt_cleanup_pivot_a = smt_cleanup_mode != "Bypass Pivot A" and smt_cleanup_mode != "None"
+smt_cleanup_pivot_b = smt_cleanup_mode != "Bypass Pivot B" and smt_cleanup_mode != "None"
+smt_cleanup_inside = smt_cleanup_mode != "Bypass Inside Range" and smt_cleanup_mode != "None"
+
+smt_session_filter_on = input.bool(false, "Enable SMT Session Filter?", inline="smt_sess_master", group=g_smt_sessions, tooltip=TIP_SESSION_FILTER)
+smt_auto_session_filter = input.bool(false, "Auto", inline="smt_sess_master", group=g_smt_sessions, active=smt_session_filter_on, tooltip=TIP_AUTO_SESSION)
+smt_session_1_on = input.bool(false, "Asia   ", inline="smt_sess1", group=g_smt_sessions, active=smt_session_filter_on and not smt_auto_session_filter)
+smt_session_1_start = input.string("20:00", "", options=["20:00", "20:30", "21:00", "21:30"], inline="smt_sess1", group=g_smt_sessions, active=smt_session_filter_on and not smt_auto_session_filter and smt_session_1_on)
+smt_session_1_end = input.string("00:00", "—", options=["00:00", "00:30", "01:00", "01:30"], inline="smt_sess1", group=g_smt_sessions, active=smt_session_filter_on and not smt_auto_session_filter and smt_session_1_on)
+smt_session_2_on = input.bool(false, "London", inline="smt_sess2", group=g_smt_sessions, active=smt_session_filter_on and not smt_auto_session_filter)
+smt_session_2_start = input.string("02:00", "", options=["01:30", "02:00", "02:30", "03:00"], inline="smt_sess2", group=g_smt_sessions, active=smt_session_filter_on and not smt_auto_session_filter and smt_session_2_on)
+smt_session_2_end = input.string("06:00", "—", options=["05:00", "05:30", "06:00", "06:30"], inline="smt_sess2", group=g_smt_sessions, active=smt_session_filter_on and not smt_auto_session_filter and smt_session_2_on)
+smt_session_3_on = input.bool(true, "NY-AM ", inline="smt_sess3", group=g_smt_sessions, active=smt_session_filter_on and not smt_auto_session_filter)
+smt_session_3_start = input.string("07:30", "", options=["07:30", "08:00", "08:30", "09:00"], inline="smt_sess3", group=g_smt_sessions, active=smt_session_filter_on and not smt_auto_session_filter and smt_session_3_on)
+smt_session_3_end = input.string("12:00", "—", options=["12:00", "12:30", "13:00", "13:30"], inline="smt_sess3", group=g_smt_sessions, active=smt_session_filter_on and not smt_auto_session_filter and smt_session_3_on)
+smt_session_4_on = input.bool(false, "NY-PM ", inline="smt_sess4", group=g_smt_sessions, active=smt_session_filter_on and not smt_auto_session_filter)
+smt_session_4_start = input.string("13:30", "", options=["13:00", "13:30", "14:00", "14:30"], inline="smt_sess4", group=g_smt_sessions, active=smt_session_filter_on and not smt_auto_session_filter and smt_session_4_on)
+smt_session_4_end = input.string("17:00", "—", options=["17:00", "17:30", "18:00", "18:30"], inline="smt_sess4", group=g_smt_sessions, active=smt_session_filter_on and not smt_auto_session_filter and smt_session_4_on)
+smt_render_current_day_only = input.bool(false, "Render Only Current Day Range                                            ", group=g_smt_sessions)
+
+smt_pair_selection = input.string("Auto", "Pair Selection", options=["Auto", "Manual"], group=g_smt_assets, tooltip=TIP_MANUAL_PAIRS)
+smt_correlation_mode = input.string("Classic", "Correlation Mode", options=["GXT", "Classic"], group=g_smt_assets)
+smt_correlation_type = input.string("Triad", "Correlation Type", options=["Dyad", "Triad", "Tetrad"], group=g_smt_assets)
+smt_manual_pair1 = input.symbol("", "Pair 1", inline="smt_manual_pair1", group=g_smt_assets, active=smt_pair_selection == "Manual")
+smt_manual_pair1_inverted = input.bool(false, "Inversed?", inline="smt_manual_pair1", group=g_smt_assets, active=smt_pair_selection == "Manual")
+smt_manual_pair2 = input.symbol("", "Pair 2", inline="smt_manual_pair2", group=g_smt_assets, active=smt_pair_selection == "Manual" and smt_correlation_type != "Dyad")
+smt_manual_pair2_inverted = input.bool(false, "Inversed?", inline="smt_manual_pair2", group=g_smt_assets, active=smt_pair_selection == "Manual" and smt_correlation_type != "Dyad")
+smt_manual_pair3 = input.symbol("", "Pair 3", inline="smt_manual_pair3", group=g_smt_assets, active=smt_pair_selection == "Manual" and smt_correlation_type == "Tetrad")
+smt_manual_pair3_inverted = input.bool(false, "Inversed?", inline="smt_manual_pair3", group=g_smt_assets, active=smt_pair_selection == "Manual" and smt_correlation_type == "Tetrad")
+
+//==============================================================================
+// Time declarations and GXV auto timezone/session helpers
+//==============================================================================
+tf = timeframe.period
+tf_sec = timeframe.in_seconds(tf)
+f_is_mid_prefix(string px) =>
+    px == "CAPITALCOM" or px == "CMCMARKETS"
+
+f_is_chicago_prefix(string px) =>
+    px == "CME" or px == "CBOT" or px == "CBOT_MINI" or px == "CBOT_DL" or px == "CME_MINI" or px == "CME_DL" or px == "CME_MINI_DL" or px == "COMEX" or px == "NYMEX"
+
+f_is_utc_prefix(string px) =>
+    px == "BINANCE" or px == "BYBIT" or px == "KRAKEN" or px == "GATE.IO" or px == "BITSTAMP" or px == "COINBASE" or px == "GEMINI"
+
+f_oracle_tz(string px) =>
+    f_is_chicago_prefix(px) ? "America/Chicago" : f_is_mid_prefix(px) ? "Etc/GMT+5" : f_is_utc_prefix(px) ? "UTC" : "America/New_York"
+
+f_oracle_day_start_hour(string px) =>
+    f_is_chicago_prefix(px) or f_is_mid_prefix(px) ? 17 : f_is_utc_prefix(px) ? 22 : 18
+
+f_days_since_sunday(int dow) =>
+    dow == dayofweek.sunday ? 0 : dow == dayofweek.monday ? 1 : dow == dayofweek.tuesday ? 2 : dow == dayofweek.wednesday ? 3 : dow == dayofweek.thursday ? 4 : dow == dayofweek.friday ? 5 : 6
+
+f_smt_anchor_range_key(int barTime, int anchorTime, int rangeMinutes) =>
+    int rangeMs = rangeMinutes * 60 * 1000
+    int bucket = int(math.floor((barTime - anchorTime) / rangeMs))
+    anchorTime + bucket * rangeMs
+
+f_smt_daily_range_key(int dayStartTime) =>
+    dayStartTime
+
+f_smt_iso_week_year(int refTime, string tz) =>
+    int wy = year(refTime, tz)
+    int wm = month(refTime, tz)
+    int cw = weekofyear(refTime, tz)
+    if wm == 12 and cw == 1
+        wy := wy + 1
+    else if wm == 1 and cw >= 52
+        wy := wy - 1
+    wy
+
+f_smt_iso_week_range_key(int dayStartTime, int oneDayMs, string tz) =>
+    int refTime = dayStartTime + oneDayMs
+    int wy = f_smt_iso_week_year(refTime, tz)
+    int cw = weekofyear(refTime, tz)
+    wy * 100 + cw
+
+f_smt_month_range_key(int dayStartTime, string tz) =>
+    year(dayStartTime, tz) * 100 + month(dayStartTime, tz)
+
+f_smt_month_of_quarter_slot(int dayStartTime, string tz) =>
+    int cm = month(dayStartTime, tz)
+    int qsM = int(math.floor((cm - 1) / 3)) * 3 + 1
+    cm - qsM
+
+f_smt_month_of_quarter_range_key(int dayStartTime, string tz) =>
+    int cy = year(dayStartTime, tz)
+    int cm = month(dayStartTime, tz)
+    int q = int(math.floor((cm - 1) / 3)) + 1
+    int slot = f_smt_month_of_quarter_slot(dayStartTime, tz)
+    cy * 100 + q * 10 + slot
+
+f_smt_quarter_subrange_slot(int barTime, int dayStartTime, string tz, int startHour) =>
+    int cy = year(dayStartTime, tz)
+    int cm = month(dayStartTime, tz)
+    int qsM = int(math.floor((cm - 1) / 3)) * 3 + 1
+    int qsT = timestamp(tz, cy, qsM, 1, startHour, 0)
+    int qeT = qsM == 10 ? timestamp(tz, cy + 1, 1, 1, startHour, 0) : timestamp(tz, cy, qsM + 3, 1, startHour, 0)
+    int q = int(math.floor((barTime - qsT) * 4.0 / math.max(1, qeT - qsT)))
+    math.max(0, math.min(3, q))
+
+f_smt_quarter_subrange_key(int barTime, int dayStartTime, string tz, int startHour) =>
+    int cy = year(dayStartTime, tz)
+    int cm = month(dayStartTime, tz)
+    int quarter = int(math.floor((cm - 1) / 3)) + 1
+    int slot = f_smt_quarter_subrange_slot(barTime, dayStartTime, tz, startHour)
+    cy * 100 + quarter * 10 + slot
+
+f_smt_four_year_phase(int y) =>
+    y % 4 == 3 ? 0 : y % 4 == 0 ? 1 : y % 4 == 1 ? 2 : 3
+
+f_smt_four_year_range_key(int barTime, string tz) =>
+    int y = year(barTime, tz)
+    int block = int(math.floor(y / 4))
+    block * 10 + f_smt_four_year_phase(y)
+
+f_smt_local_day_start(int barTime, string tz, int startHour) =>
+    int localYear = year(barTime, tz)
+    int localMonth = month(barTime, tz)
+    int localDay = dayofmonth(barTime, tz)
+    int todayStart = timestamp(tz, localYear, localMonth, localDay, startHour, 0)
+    int previousDayProbe = barTime - 24 * 60 * 60 * 1000
+    barTime >= todayStart ? todayStart : timestamp(tz, year(previousDayProbe, tz), month(previousDayProbe, tz), dayofmonth(previousDayProbe, tz), startHour, 0)
+
+f_smt_shift_local_day_start(int sourceDayStart, int daysBack, string tz, int startHour) =>
+    int shiftedProbe = sourceDayStart - daysBack * 24 * 60 * 60 * 1000
+    timestamp(tz, year(shiftedProbe, tz), month(shiftedProbe, tz), dayofmonth(shiftedProbe, tz), startHour, 0)
+
+px = syminfo.prefix
+oracle_tz = f_oracle_tz(px)
+dayStartHour = f_oracle_day_start_hour(px)
+msDay = 24 * 60 * 60 * 1000
+dayStart = f_smt_local_day_start(time, oracle_tz, dayStartHour)
+dayStartDow = dayofweek(dayStart, oracle_tz)
+weeklyCycleAnchor = f_smt_shift_local_day_start(dayStart, f_days_since_sunday(dayStartDow), oracle_tz, dayStartHour)
+
+// GXV deterministic range keys.
+val_ses15 = f_smt_anchor_range_key(time, dayStart, 15)
+val_ses30 = f_smt_anchor_range_key(time, dayStart, 30)
+val_ses90 = f_smt_anchor_range_key(time, dayStart, 90)
+val_ses60 = f_smt_anchor_range_key(time, dayStart, 60)
+val_ses240 = f_smt_anchor_range_key(time, dayStart, 240)
+val_sesD = f_smt_anchor_range_key(time, dayStart, 360)
+val_ses420 = f_smt_anchor_range_key(time, weeklyCycleAnchor, 420)
+val_ses720 = f_smt_anchor_range_key(time, dayStart, 720)
+val_sesW = f_smt_daily_range_key(dayStart)
+val_sesM = f_smt_iso_week_range_key(dayStart, msDay, oracle_tz)
+val_sesMT = f_smt_month_of_quarter_range_key(dayStart, oracle_tz)
+val_sesQ = f_smt_quarter_subrange_key(time, dayStart, oracle_tz, dayStartHour)
+val_sesY = f_smt_four_year_range_key(time, "America/New_York")
+
+// GXV chart-timeframe gates — hardcoded stable reconstruction-safe gates.
+const int TF_SEC_1 = 60
+const int TF_SEC_3 = 3 * TF_SEC_1
+const int TF_SEC_5 = 5 * TF_SEC_1
+const int TF_SEC_15 = 15 * TF_SEC_1
+const int TF_SEC_30 = 30 * TF_SEC_1
+const int TF_SEC_60 = 60 * TF_SEC_1
+const int TF_SEC_240 = 240 * TF_SEC_1
+const int TF_SEC_360 = 360 * TF_SEC_1
+const int TF_SEC_D = 24 * 60 * 60
+const int TF_SEC_M = 30 * TF_SEC_D
+
+SMT_GATE_15M = TF_SEC_5
+SMT_GATE_30M = TF_SEC_5
+SMT_GATE_90M = TF_SEC_15
+SMT_GATE_1H = TF_SEC_15
+SMT_GATE_4H = TF_SEC_60
+SMT_GATE_6H = TF_SEC_60
+SMT_GATE_7H = TF_SEC_60
+SMT_GATE_12H = TF_SEC_240
+SMT_GATE_1D = TF_SEC_240
+SMT_GATE_1W = TF_SEC_360
+SMT_GATE_1M = TF_SEC_360
+SMT_GATE_3M = TF_SEC_D
+SMT_GATE_12M = TF_SEC_M
+tf_ok_15m = tf_sec <= SMT_GATE_15M
+tf_ok_30m = tf_sec <= SMT_GATE_30M
+tf_ok_90m = tf_sec <= SMT_GATE_90M
+tf_ok_1h = tf_sec <= SMT_GATE_1H
+tf_ok_4h = tf_sec <= SMT_GATE_4H
+tf_ok_6h = tf_sec <= SMT_GATE_6H
+tf_ok_7h = tf_sec <= SMT_GATE_7H
+tf_ok_12h = tf_sec <= SMT_GATE_12H
+tf_ok_1d = tf_sec <= SMT_GATE_1D
+tf_ok_1w = tf_sec <= SMT_GATE_1W
+tf_ok_1m = tf_sec <= SMT_GATE_1M
+tf_ok_3m = tf_sec <= SMT_GATE_3M
+tf_ok_12m = tf_sec <= SMT_GATE_12M
+
+// Monthly SMT minimum chart-timeframe render policy.
+// Display authority only: existing SMT compute gates and lifecycle state remain unchanged.
+f_smt_monthly_tf_render_ok(int rank) =>
+    bool isMonthlyRank = rank == 11 or rank == 12 or rank == 13
+    int minTfSec = smt_monthly_min_tf == "1 Hour" ? TF_SEC_60 : smt_monthly_min_tf == "4 Hour" ? TF_SEC_240 : smt_monthly_min_tf == "1 Day" ? TF_SEC_D : 0
+    not isMonthlyRank or minTfSec == 0 or tf_sec >= minTfSec
+
+
+//==============================================================================
+// GXV AssetCorrelationUtils bridge
+type SmtCorrelationDescriptor
+    string symbol
+    string displayName
+    bool inverse
+    bool configured
+    bool dataReady
+    float sourceHigh
+    float sourceLow
+    int sourceTime
+
+//==============================================================================
+const string INVALID_SECONDARY = "__GXV_SMT_INVALID_SECONDARY__"
+const string INVALID_TERTIARY = "__GXV_SMT_INVALID_TERTIARY__"
+const string INVALID_QUATERNARY = "__GXV_SMT_INVALID_QUATERNARY__"
+
+f_has_symbol(string s) =>
+    str.length(s) > 0
+
+f_asset_token(string s) =>
+    array<string> parts = str.split(s, ":")
+    array.size(parts) > 1 ? array.get(parts, 1) : s
+
+f_same_symbol(string a, string b) =>
+    str.upper(a) == str.upper(b) or str.upper(f_asset_token(a)) == str.upper(f_asset_token(b))
+
+string csym = ""
+string tsym3 = ""
+string qsym4 = ""
+bool corr_base_ok = false
+bool corr_has_tertiary = false
+bool corr_has_quaternary = false
+bool corr_pair1_ok = false
+bool corr_pair2_ok = false
+bool corr_pair3_ok = false
+bool corr_pair1_configured = false
+bool corr_pair2_configured = false
+bool corr_pair3_configured = false
+bool corr_inv1 = false
+bool corr_inv2 = false
+bool corr_inv3 = false
+bool corr_type_pair2 = smt_correlation_type != "Dyad"
+bool corr_type_pair3 = smt_correlation_type == "Tetrad"
+bool corr_manual_mode = smt_pair_selection == "Manual"
+bool corr_manual_pair1_ok = f_has_symbol(smt_manual_pair1) and not f_same_symbol(smt_manual_pair1, syminfo.tickerid)
+bool corr_manual_pair2_ok = corr_type_pair2 and f_has_symbol(smt_manual_pair2) and not f_same_symbol(smt_manual_pair2, syminfo.tickerid) and not f_same_symbol(smt_manual_pair2, smt_manual_pair1)
+bool corr_manual_pair3_ok = corr_type_pair3 and f_has_symbol(smt_manual_pair3) and not f_same_symbol(smt_manual_pair3, syminfo.tickerid) and not f_same_symbol(smt_manual_pair3, smt_manual_pair1) and not f_same_symbol(smt_manual_pair3, smt_manual_pair2)
+if corr_manual_mode
+    corr_base_ok := corr_manual_pair1_ok
+    corr_has_tertiary := corr_manual_pair2_ok
+    corr_has_quaternary := corr_manual_pair3_ok
+    csym := corr_manual_pair1_ok ? smt_manual_pair1 : ""
+    tsym3 := corr_manual_pair2_ok ? smt_manual_pair2 : ""
+    qsym4 := corr_manual_pair3_ok ? smt_manual_pair3 : ""
+    corr_inv1 := corr_manual_pair1_ok ? smt_manual_pair1_inverted : false
+    corr_inv2 := corr_manual_pair2_ok ? smt_manual_pair2_inverted : false
+    corr_inv3 := corr_manual_pair3_ok ? smt_manual_pair3_inverted : false
+else
+    GXV.AssetConfig corr_cfg = GXV.resolveAssetsByCorrelation(syminfo.ticker, syminfo.tickerid, syminfo.type, syminfo.session, false, smt_correlation_mode, smt_correlation_type)
+    corr_base_ok := corr_cfg.detected and f_has_symbol(corr_cfg.secondary) and not f_same_symbol(corr_cfg.secondary, syminfo.tickerid)
+    corr_has_tertiary := corr_type_pair2 and corr_base_ok and f_has_symbol(corr_cfg.tertiary) and not f_same_symbol(corr_cfg.tertiary, syminfo.tickerid) and not f_same_symbol(corr_cfg.secondary, corr_cfg.tertiary)
+    corr_has_quaternary := corr_type_pair3 and corr_has_tertiary and f_has_symbol(corr_cfg.quaternary) and not f_same_symbol(corr_cfg.quaternary, syminfo.tickerid) and not f_same_symbol(corr_cfg.quaternary, corr_cfg.secondary) and not f_same_symbol(corr_cfg.quaternary, corr_cfg.tertiary)
+    csym := corr_base_ok ? corr_cfg.secondary : ""
+    tsym3 := corr_has_tertiary ? corr_cfg.tertiary : ""
+    qsym4 := corr_has_quaternary ? corr_cfg.quaternary : ""
+    corr_inv1 := corr_base_ok ? corr_cfg.invertSecondary : false
+    corr_inv2 := corr_has_tertiary ? corr_cfg.invertTertiary : false
+    corr_inv3 := corr_has_quaternary ? corr_cfg.invertQuaternary : false
+corr_pair1_configured := corr_base_ok and f_has_symbol(csym)
+corr_pair2_configured := corr_has_tertiary and f_has_symbol(tsym3)
+corr_pair3_configured := corr_has_quaternary and f_has_symbol(qsym4)
+string corr_fetch_sym1 = corr_pair1_configured ? csym : INVALID_SECONDARY
+string corr_fetch_sym2 = corr_pair2_configured ? tsym3 : INVALID_TERTIARY
+string corr_fetch_sym3 = corr_pair3_configured ? qsym4 : INVALID_QUATERNARY
+[xh0, xl0, xt0] = request.security(corr_fetch_sym1, tf, [high, low, time], gaps=barmerge.gaps_on, lookahead=barmerge.lookahead_off, ignore_invalid_symbol=true)
+[yh0, yl0, yt0] = request.security(corr_fetch_sym2, tf, [high, low, time], gaps=barmerge.gaps_on, lookahead=barmerge.lookahead_off, ignore_invalid_symbol=true)
+[zh0, zl0, zt0] = request.security(corr_fetch_sym3, tf, [high, low, time], gaps=barmerge.gaps_on, lookahead=barmerge.lookahead_off, ignore_invalid_symbol=true)
+corr_pair1_ok := corr_pair1_configured and not na(xh0) and not na(xl0) and not na(xt0)
+corr_pair2_ok := corr_pair2_configured and not na(yh0) and not na(yl0) and not na(yt0)
+corr_pair3_ok := corr_pair3_configured and not na(zh0) and not na(zl0) and not na(zt0)
+string smt_pair = corr_pair1_configured ? GXV.getAssetTicker(csym) : ""
+string smt_pair2 = corr_pair2_configured ? GXV.getAssetTicker(tsym3) : ""
+string smt_pair3 = corr_pair3_configured ? GXV.getAssetTicker(qsym4) : ""
+SmtCorrelationDescriptor smt_corr_pair1 = SmtCorrelationDescriptor.new(csym, smt_pair, corr_inv1, corr_pair1_configured, corr_pair1_ok, xh0, xl0, xt0)
+SmtCorrelationDescriptor smt_corr_pair2 = SmtCorrelationDescriptor.new(tsym3, smt_pair2, corr_inv2, corr_pair2_configured, corr_pair2_ok, yh0, yl0, yt0)
+SmtCorrelationDescriptor smt_corr_pair3 = SmtCorrelationDescriptor.new(qsym4, smt_pair3, corr_inv3, corr_pair3_configured, corr_pair3_ok, zh0, zl0, zt0)
+
+//==============================================================================
+// GXV SMT market-state engine
+// DATA -> RANGE -> SWEEP -> DIVERGENCE -> EVENT -> INVALIDATION -> PROJECTION
+//==============================================================================
+const int SMT_STATE_CYCLES = 13
+const int SMT_SRC_COUNT = 4
+const int SMT_PAIR_COUNT = 3
+const int SMT_SRC_MAIN = 0
+const int SMT_SRC_PAIR1 = 1
+const int SMT_SRC_PAIR2 = 2
+const int SMT_SRC_PAIR3 = 3
+const int SMT_DIR_BEAR = -1
+const int SMT_DIR_BULL = 1
+const int SMT_EVENT_LIVE = 1
+const int SMT_EVENT_CONFIRMED = 2
+const int SMT_EVENT_INVALIDATED = 3
+const int SMT_LIVE_SLOTS = SMT_STATE_CYCLES * SMT_PAIR_COUNT * 2
+const int SMT_DOMAIN_EVENT_CAP = 600
+const int SMT_RENDER_EVENT_CAP = 480
+
+type SmtRangeState
+    float currentHigh
+    float previousHigh
+    float currentLow
+    float previousLow
+    int currentHighTime
+    int previousHighTime
+    int currentLowTime
+    int previousLowTime
+    int currentHighBar
+    int previousHighBar
+    int currentLowBar
+    int previousLowBar
+    int cycleKey
+    int previousCycleKey
+    bool hasCurrentRange
+    bool hasPreviousRange
+
+type SmtSweepState
+    bool ready
+    bool highSwept
+    bool lowSwept
+    float highPivotA
+    float highPivotB
+    float lowPivotA
+    float lowPivotB
+    int highTimeA
+    int highTimeB
+    int lowTimeA
+    int lowTimeB
+    int highBarA
+    int highBarB
+    int lowBarA
+    int lowBarB
+
+type SmtEvent
+    int id
+    int rank
+    int pairSlot
+    int dir
+    int cycleKey
+    int previousCycleKey
+    float pivotAPrice
+    float pivotBPrice
+    int pivotATime
+    int pivotBTime
+    int pivotABar
+    int pivotBBar
+    int structType
+    int state
+    bool bodyBlocked
+    line lineId
+    label labelId
+    bool projectA
+    bool projectB
+    bool bypassed
+
+type SmtLiveSlot
+    bool active
+    int eventId
+    int cycleKey
+
+var array<SmtRangeState> smt_range_states = array.new<SmtRangeState>()
+var array<SmtEvent> smt_events = array.new<SmtEvent>()
+var array<SmtLiveSlot> smt_live_slots = array.new<SmtLiveSlot>()
+
+f_smt_state_idx(int cycleIdx, int srcIdx) =>
+    cycleIdx * SMT_SRC_COUNT + srcIdx
+
+f_smt_live_slot(int rank, int pairSlot, int dir) =>
+    (rank - 1) * SMT_PAIR_COUNT * 2 + (pairSlot - 1) * 2 + (dir == SMT_DIR_BULL ? 1 : 0)
+
+f_smt_event_id(int rank, int pairSlot, int dir, int cycleKey) =>
+    cycleKey * 100 + f_smt_live_slot(rank, pairSlot, dir)
+
+f_smt_seed_engine() =>
+    if array.size(smt_range_states) == 0
+        for i = 0 to SMT_STATE_CYCLES * SMT_SRC_COUNT - 1
+            array.push(smt_range_states, SmtRangeState.new(na, na, na, na, na, na, na, na, na, na, na, na, na, na, false, false))
+    if array.size(smt_live_slots) == 0
+        for i = 0 to SMT_LIVE_SLOTS - 1
+            array.push(smt_live_slots, SmtLiveSlot.new(false, na, na))
+    0
+
+f_smt_rank_enabled(int rank) =>
+    rank == 1 ? smt_15m_show : rank == 2 ? smt_30m_show : rank == 3 ? smt_1h_show : rank == 4 ? smt_90m_show : rank == 5 ? smt_4h_show : rank == 6 ? smt_6h_show : rank == 7 ? smt_7h_show : rank == 8 ? smt_12h_show : rank == 9 ? smt_1d_show : rank == 10 ? smt_1w_show : rank == 11 ? smt_1m_show : rank == 12 ? smt_3m_show : rank == 13 ? smt_12m_show : false
+
+f_smt_pair_enabled(int pairSlot) =>
+    pairSlot == 1 ? smt_corr_pair1.configured : pairSlot == 2 ? smt_corr_pair2.configured : pairSlot == 3 ? smt_corr_pair3.configured : false
+
+f_smt_rank_shortname(int rank) =>
+    rank == 1 ? "15m" : rank == 2 ? "30m" : rank == 3 ? "1H" : rank == 4 ? "90m" : rank == 5 ? "4H" : rank == 6 ? "6H" : rank == 7 ? "7H" : rank == 8 ? "12H" : rank == 9 ? "1D" : rank == 10 ? "1W" : rank == 11 ? "1M" : rank == 12 ? "3M" : rank == 13 ? "12M" : ""
+
+f_smt_rank_color(int rank) =>
+    rank == 1 ? smt_15m_clr : rank == 2 ? smt_30m_clr : rank == 3 ? smt_1h_clr : rank == 4 ? smt_90m_clr : rank == 5 ? smt_4h_clr : rank == 6 ? smt_6h_clr : rank == 7 ? smt_7h_clr : rank == 8 ? smt_12h_clr : rank == 9 ? smt_1d_clr : rank == 10 ? smt_1w_clr : rank == 11 ? smt_1m_clr : rank == 12 ? smt_3m_clr : rank == 13 ? smt_12m_clr : color.gray
+
+f_smt_rank_gate_sec(int rank) =>
+    rank == 1 ? SMT_GATE_15M : rank == 2 ? SMT_GATE_30M : rank == 3 ? SMT_GATE_1H : rank == 4 ? SMT_GATE_90M : rank == 5 ? SMT_GATE_4H : rank == 6 ? SMT_GATE_6H : rank == 7 ? SMT_GATE_7H : rank == 8 ? SMT_GATE_12H : rank == 9 ? SMT_GATE_1D : rank == 10 ? SMT_GATE_1W : rank == 11 ? SMT_GATE_1M : rank == 12 ? SMT_GATE_3M : SMT_GATE_12M
+
+f_smt_pair_name_for_slot(int pairSlot) =>
+    pairSlot == 1 ? smt_corr_pair1.displayName : pairSlot == 2 ? smt_corr_pair2.displayName : pairSlot == 3 ? smt_corr_pair3.displayName : ""
+
+f_smt_label_text(string shortname, string pairName) =>
+    smt_label_style == "Asset Only" ? "SMT " + pairName : smt_label_style == "TF Only" ? shortname + " SMT" : shortname + " SMT " + pairName
+
+f_smt_default_label_text(int rank, int pairSlot) =>
+    f_smt_label_text(f_smt_rank_shortname(rank), f_smt_pair_name_for_slot(pairSlot))
+
+f_smt_bypass_label_text(int rank, int pairSlot) =>
+    smt_label_style == "Asset Only" ? f_smt_pair_name_for_slot(pairSlot) : f_smt_rank_shortname(rank)
+
+f_smt_labels_for_rank(int rank) =>
+    bool dynamicExcluded = rank == 12 or rank == 13
+    bool hideAtOrAboveGate = smt_dynamic_labels and not dynamicExcluded and tf_sec >= f_smt_rank_gate_sec(rank)
+    smt_labels_show and not hideAtOrAboveGate
+
+f_smt_event_mid_y(float y1, float y2) =>
+    math.round_to_mintick((y1 + y2) * 0.5)
+
+f_smt_event_label_time(int x1, int x2, int b1, int b2) =>
+    int labelBar = int(math.floor((b1 + b2) * 0.5))
+    int labelOffset = bar_index - labelBar
+    bool canUseMidBarTime = not na(labelBar) and labelOffset >= 0 and labelOffset <= 5000
+    canUseMidBarTime ? time[labelOffset] : int(math.round(x1 + (x2 - x1) * 0.5))
+
+f_smt_structure_type(bool isBull, float y1, float y2) =>
+    isBull ? (y2 > y1 ? 1 : y2 < y1 ? 2 : 0) : (y2 > y1 ? 3 : y2 < y1 ? 4 : 0)
+
+f_smt_struct_required_for_cleanup(int rank) =>
+    rank == 11 or rank == 12 or rank == 13
+
+f_smt_cleanup_struct_ok(int dominatedRank, int dominatedStruct, int dominantStruct) =>
+    not f_smt_struct_required_for_cleanup(dominatedRank) or (dominatedStruct != 0 and dominatedStruct == dominantStruct)
+
+f_smt_body_filter_applies(int rank) =>
+    rank != 13
+
+f_smt_body_intersects(int bx1, int bx2, float y1, float y2) =>
+    bool hit = false
+    int span = bx2 - bx1
+    if span > 3
+        int fromX = math.max(bx1 + 2, bar_index - 4999)
+        int toX = math.min(bx2 - 2, bar_index)
+        if fromX <= toX
+            for x = fromX to toX
+                int barsAgo = bar_index - x
+                float linePrice = y1 + (y2 - y1) * (x - bx1) / span
+                float bodyLow = math.min(open[barsAgo], close[barsAgo])
+                float bodyHigh = math.max(open[barsAgo], close[barsAgo])
+                if bodyLow <= linePrice and linePrice <= bodyHigh
+                    hit := true
+                    break
+    hit
+
+// Equality is not a liquidity take; strict extrema retain first-touch identity.
+f_smt_high_swept(float currentValue, float previousValue) =>
+    not na(currentValue) and not na(previousValue) and currentValue > previousValue
+
+f_smt_low_swept(float currentValue, float previousValue) =>
+    not na(currentValue) and not na(previousValue) and currentValue < previousValue
+
+f_smt_update_state(int cycleIdx, int srcIdx, bool engineEnabled, int rangeKey, float srcHigh, float srcLow, int srcTime) =>
+    if engineEnabled and not na(rangeKey)
+        int idx = f_smt_state_idx(cycleIdx, srcIdx)
+        SmtRangeState st = array.get(smt_range_states, idx)
+        bool dataReady = not na(srcHigh) and not na(srcLow) and not na(srcTime)
+        if na(st.cycleKey)
+            st.cycleKey := rangeKey
+            st.previousCycleKey := na
+            st.hasCurrentRange := false
+            st.hasPreviousRange := false
+        else if rangeKey != st.cycleKey
+            st.previousHigh := st.currentHigh
+            st.previousLow := st.currentLow
+            st.previousHighTime := st.currentHighTime
+            st.previousLowTime := st.currentLowTime
+            st.previousHighBar := st.currentHighBar
+            st.previousLowBar := st.currentLowBar
+            st.previousCycleKey := st.cycleKey
+            st.hasPreviousRange := st.hasCurrentRange
+            st.currentHigh := na
+            st.currentLow := na
+            st.currentHighTime := na
+            st.currentLowTime := na
+            st.currentHighBar := na
+            st.currentLowBar := na
+            st.hasCurrentRange := false
+            st.cycleKey := rangeKey
+        if dataReady and st.cycleKey == rangeKey
+            if na(st.currentHigh) or srcHigh > st.currentHigh
+                st.currentHigh := srcHigh
+                st.currentHighTime := srcTime
+                st.currentHighBar := bar_index
+            if na(st.currentLow) or srcLow < st.currentLow
+                st.currentLow := srcLow
+                st.currentLowTime := srcTime
+                st.currentLowBar := bar_index
+            st.hasCurrentRange := true
+        array.set(smt_range_states, idx, st)
+    0
+
+f_smt_get_state(int cycleIdx, int srcIdx) =>
+    array.get(smt_range_states, f_smt_state_idx(cycleIdx, srcIdx))
+
+// Inverse pairs are normalized once into main-domain high/low liquidity actions.
+f_smt_build_sweeps(SmtRangeState st, bool inverse) =>
+    bool ready = st.hasCurrentRange and st.hasPreviousRange
+    float highA = inverse ? st.previousLow : st.previousHigh
+    float highB = inverse ? st.currentLow : st.currentHigh
+    float lowA = inverse ? st.previousHigh : st.previousLow
+    float lowB = inverse ? st.currentHigh : st.currentLow
+    int highTimeA = inverse ? st.previousLowTime : st.previousHighTime
+    int highTimeB = inverse ? st.currentLowTime : st.currentHighTime
+    int lowTimeA = inverse ? st.previousHighTime : st.previousLowTime
+    int lowTimeB = inverse ? st.currentHighTime : st.currentLowTime
+    int highBarA = inverse ? st.previousLowBar : st.previousHighBar
+    int highBarB = inverse ? st.currentLowBar : st.currentHighBar
+    int lowBarA = inverse ? st.previousHighBar : st.previousLowBar
+    int lowBarB = inverse ? st.currentHighBar : st.currentLowBar
+    bool highSweep = ready and (inverse ? f_smt_low_swept(highB, highA) : f_smt_high_swept(highB, highA))
+    bool lowSweep = ready and (inverse ? f_smt_high_swept(lowB, lowA) : f_smt_low_swept(lowB, lowA))
+    SmtSweepState.new(ready, highSweep, lowSweep, highA, highB, lowA, lowB, highTimeA, highTimeB, lowTimeA, lowTimeB, highBarA, highBarB, lowBarA, lowBarB)
+
+f_smt_xor(bool first, bool second) =>
+    (first and not second) or (not first and second)
+
+// Pure divergence truth: exactly one synchronized market sweeps corresponding liquidity.
+f_smt_resolve_pair_state(SmtSweepState mainSweep, SmtSweepState pairSweep) =>
+    bool ready = mainSweep.ready and pairSweep.ready
+    bool bearValid = ready and f_smt_xor(mainSweep.highSwept, pairSweep.highSwept)
+    bool bullValid = ready and f_smt_xor(mainSweep.lowSwept, pairSweep.lowSwept)
+    [bearValid, bullValid]
+//==============================================================================
+// Session and time projection policy
+//==============================================================================
+f_smt_time_to_minutes(string t) =>
+    array<string> parts = str.split(t, ":")
+    int h = array.size(parts) > 0 ? int(str.tonumber(array.get(parts, 0))) : 0
+    int m = array.size(parts) > 1 ? int(str.tonumber(array.get(parts, 1))) : 0
+    h * 60 + m
+
+f_smt_minutes_in_window(int tMin, int startMin, int endMin) =>
+    startMin <= endMin ? (tMin >= startMin and tMin <= endMin) : (tMin >= startMin or tMin <= endMin)
+
+var int smt_session_1_start_min = f_smt_time_to_minutes(smt_session_1_start)
+var int smt_session_1_end_min = f_smt_time_to_minutes(smt_session_1_end)
+var int smt_session_2_start_min = f_smt_time_to_minutes(smt_session_2_start)
+var int smt_session_2_end_min = f_smt_time_to_minutes(smt_session_2_end)
+var int smt_session_3_start_min = f_smt_time_to_minutes(smt_session_3_start)
+var int smt_session_3_end_min = f_smt_time_to_minutes(smt_session_3_end)
+var int smt_session_4_start_min = f_smt_time_to_minutes(smt_session_4_start)
+var int smt_session_4_end_min = f_smt_time_to_minutes(smt_session_4_end)
+
+smt_session_filter_effective = smt_session_filter_on and not na(tf_sec) and tf_sec <= TF_SEC_30
+smt_current_day_filter_effective = smt_render_current_day_only and not na(tf_sec) and tf_sec < TF_SEC_240
+smt_render_day_ref = last_bar_time
+smt_render_day_start = timestamp(oracle_tz, year(smt_render_day_ref, oracle_tz), month(smt_render_day_ref, oracle_tz), dayofmonth(smt_render_day_ref, oracle_tz), 0, 0)
+smt_render_day_end = timestamp(oracle_tz, year(smt_render_day_ref, oracle_tz), month(smt_render_day_ref, oracle_tz), dayofmonth(smt_render_day_ref, oracle_tz) + 1, 0, 0)
+
+smt_auto_reference_time = last_bar_time
+smt_auto_current_minutes = smt_session_filter_effective and smt_auto_session_filter ? hour(smt_auto_reference_time, "America/New_York") * 60 + minute(smt_auto_reference_time, "America/New_York") : na
+smt_auto_session_1_active = smt_session_filter_effective and smt_auto_session_filter and f_smt_minutes_in_window(smt_auto_current_minutes, smt_session_1_start_min, smt_session_1_end_min)
+smt_auto_session_2_active = smt_session_filter_effective and smt_auto_session_filter and not smt_auto_session_1_active and f_smt_minutes_in_window(smt_auto_current_minutes, smt_session_2_start_min, smt_session_2_end_min)
+smt_auto_session_3_active = smt_session_filter_effective and smt_auto_session_filter and not smt_auto_session_1_active and not smt_auto_session_2_active and f_smt_minutes_in_window(smt_auto_current_minutes, smt_session_3_start_min, smt_session_3_end_min)
+smt_auto_session_4_active = smt_session_filter_effective and smt_auto_session_filter and not smt_auto_session_1_active and not smt_auto_session_2_active and not smt_auto_session_3_active and f_smt_minutes_in_window(smt_auto_current_minutes, smt_session_4_start_min, smt_session_4_end_min)
+
+f_smt_session_render_ok(int pivotBTime) =>
+    bool ok = true
+    if smt_session_filter_effective
+        ok := false
+        if not na(pivotBTime)
+            int pivotMinutes = hour(pivotBTime, "America/New_York") * 60 + minute(pivotBTime, "America/New_York")
+            if smt_auto_session_filter
+                ok := smt_auto_session_1_active ? f_smt_minutes_in_window(pivotMinutes, smt_session_1_start_min, smt_session_1_end_min) : smt_auto_session_2_active ? f_smt_minutes_in_window(pivotMinutes, smt_session_2_start_min, smt_session_2_end_min) : smt_auto_session_3_active ? f_smt_minutes_in_window(pivotMinutes, smt_session_3_start_min, smt_session_3_end_min) : smt_auto_session_4_active ? f_smt_minutes_in_window(pivotMinutes, smt_session_4_start_min, smt_session_4_end_min) : false
+            else
+                bool inSession1 = smt_session_1_on and f_smt_minutes_in_window(pivotMinutes, smt_session_1_start_min, smt_session_1_end_min)
+                bool inSession2 = smt_session_2_on and f_smt_minutes_in_window(pivotMinutes, smt_session_2_start_min, smt_session_2_end_min)
+                bool inSession3 = smt_session_3_on and f_smt_minutes_in_window(pivotMinutes, smt_session_3_start_min, smt_session_3_end_min)
+                bool inSession4 = smt_session_4_on and f_smt_minutes_in_window(pivotMinutes, smt_session_4_start_min, smt_session_4_end_min)
+                ok := inSession1 or inSession2 or inSession3 or inSession4
+    ok
+
+f_smt_current_day_render_ok(int pivotBTime) =>
+    not smt_current_day_filter_effective or (not na(pivotBTime) and pivotBTime >= smt_render_day_start and pivotBTime < smt_render_day_end)
+
+f_smt_render_time_ok(int pivotBTime) =>
+    f_smt_session_render_ok(pivotBTime) and f_smt_current_day_render_ok(pivotBTime)
+
+f_smt_nearby_render_ok(int pivotBBar) =>
+    not smt_render_nearby_only or (not na(pivotBBar) and pivotBBar >= last_bar_index - smt_nearby_bars)
+
+//==============================================================================
+// Domain event lifecycle
+//==============================================================================
+f_smt_find_event_by_id(int eventId) =>
+    int idx = -1
+    int i = 0
+    while i < array.size(smt_events) and idx < 0
+        if array.get(smt_events, i).id == eventId
+            idx := i
+        i += 1
+    idx
+
+f_smt_drop_render_at(int idx) =>
+    if idx >= 0 and idx < array.size(smt_events)
+        SmtEvent event = array.get(smt_events, idx)
+        if not na(event.labelId)
+            label.delete(event.labelId)
+            event.labelId := na
+        if not na(event.lineId)
+            line.delete(event.lineId)
+            event.lineId := na
+        array.set(smt_events, idx, event)
+    0
+
+f_smt_delete_event_at(int idx) =>
+    bool deleted = false
+    if idx >= 0 and idx < array.size(smt_events)
+        f_smt_drop_render_at(idx)
+        array.remove(smt_events, idx)
+        deleted := true
+    deleted
+
+f_smt_release_live_slot(int slot) =>
+    if slot >= 0 and slot < array.size(smt_live_slots)
+        SmtLiveSlot live = array.get(smt_live_slots, slot)
+        live.active := false
+        live.eventId := na
+        live.cycleKey := na
+        array.set(smt_live_slots, slot, live)
+    0
+
+f_smt_remove_live_slot(int slot) =>
+    if slot >= 0 and slot < array.size(smt_live_slots)
+        SmtLiveSlot live = array.get(smt_live_slots, slot)
+        if live.active and not na(live.eventId)
+            int eventIdx = f_smt_find_event_by_id(live.eventId)
+            if eventIdx >= 0
+                f_smt_delete_event_at(eventIdx)
+        f_smt_release_live_slot(slot)
+    0
+
+f_smt_finalize_live_slot(int slot, int currentCycle) =>
+    bool finalized = false
+    if slot >= 0 and slot < array.size(smt_live_slots)
+        SmtLiveSlot live = array.get(smt_live_slots, slot)
+        if live.active and not na(currentCycle) and not na(live.cycleKey) and currentCycle != live.cycleKey
+            int eventIdx = f_smt_find_event_by_id(live.eventId)
+            if eventIdx >= 0
+                SmtEvent event = array.get(smt_events, eventIdx)
+                if event.state == SMT_EVENT_LIVE
+                    event.state := SMT_EVENT_CONFIRMED
+                    event.projectA := false
+                    event.projectB := false
+                    event.bypassed := false
+                    array.set(smt_events, eventIdx, event)
+                    finalized := true
+            f_smt_release_live_slot(slot)
+    finalized
+
+f_smt_sync_live_candidate(bool valid, int cycleKey, int previousCycleKey, int rank, int pairSlot, int dir, float y1, float y2, int t1, int t2, int b1, int b2) =>
+    int slot = f_smt_live_slot(rank, pairSlot, dir)
+    SmtLiveSlot live = array.get(smt_live_slots, slot)
+    bool fieldsReady = not na(cycleKey) and not na(previousCycleKey) and not na(y1) and not na(y2) and not na(t1) and not na(t2) and not na(b1) and not na(b2)
+    if live.active and (not valid or not fieldsReady or live.cycleKey != cycleKey)
+        f_smt_remove_live_slot(slot)
+        live := array.get(smt_live_slots, slot)
+    if valid and fieldsReady
+        int eventId = f_smt_event_id(rank, pairSlot, dir, cycleKey)
+        int eventIdx = live.active ? f_smt_find_event_by_id(live.eventId) : -1
+        if eventIdx < 0
+            bool bodyBlocked = f_smt_body_filter_applies(rank) and f_smt_body_intersects(b1, b2, y1, y2)
+            SmtEvent event = SmtEvent.new(eventId, rank, pairSlot, dir, cycleKey, previousCycleKey, y1, y2, t1, t2, b1, b2, f_smt_structure_type(dir == SMT_DIR_BULL, y1, y2), SMT_EVENT_LIVE, bodyBlocked, na, na, false, false, false)
+            array.unshift(smt_events, event)
+            live.active := true
+            live.eventId := eventId
+            live.cycleKey := cycleKey
+            array.set(smt_live_slots, slot, live)
+        else
+            SmtEvent event = array.get(smt_events, eventIdx)
+            bool pivotChanged = event.pivotAPrice != y1 or event.pivotBPrice != y2 or event.pivotATime != t1 or event.pivotBTime != t2 or event.pivotABar != b1 or event.pivotBBar != b2
+            if pivotChanged
+                event.pivotAPrice := y1
+                event.pivotBPrice := y2
+                event.pivotATime := t1
+                event.pivotBTime := t2
+                event.pivotABar := b1
+                event.pivotBBar := b2
+                event.structType := f_smt_structure_type(dir == SMT_DIR_BULL, y1, y2)
+                event.bodyBlocked := f_smt_body_filter_applies(rank) and f_smt_body_intersects(b1, b2, y1, y2)
+                array.set(smt_events, eventIdx, event)
+    0
+
+f_smt_event_invalidated(SmtEvent event) =>
+    event.state == SMT_EVENT_CONFIRMED and bar_index > event.pivotBBar and ((event.dir == SMT_DIR_BEAR and high >= event.pivotBPrice) or (event.dir == SMT_DIR_BULL and low <= event.pivotBPrice))
+
+f_smt_mark_historical_invalidations() =>
+    int n = array.size(smt_events)
+    if n > 0
+        for i = n - 1 to 0
+            SmtEvent event = array.get(smt_events, i)
+            if f_smt_event_invalidated(event)
+                event.state := SMT_EVENT_INVALIDATED
+                event.projectA := false
+                event.projectB := false
+                array.set(smt_events, i, event)
+    0
+
+f_smt_gc_events() =>
+    int i = array.size(smt_events) - 1
+    while i >= 0
+        if array.get(smt_events, i).state == SMT_EVENT_INVALIDATED
+            f_smt_delete_event_at(i)
+        i -= 1
+    while array.size(smt_events) > SMT_DOMAIN_EVENT_CAP
+        int removeIdx = array.size(smt_events) - 1
+        while removeIdx >= 0 and array.get(smt_events, removeIdx).state == SMT_EVENT_LIVE
+            removeIdx -= 1
+        if removeIdx >= 0
+            f_smt_delete_event_at(removeIdx)
+        else
+            break
+    0
+//==============================================================================
+// Deterministic render projection and arbitration
+//==============================================================================
+f_smt_event_base_render_ok(SmtEvent event) =>
+    bool activeState = event.state == SMT_EVENT_LIVE or event.state == SMT_EVENT_CONFIRMED
+    activeState and f_smt_rank_enabled(event.rank) and f_smt_pair_enabled(event.pairSlot) and f_smt_monthly_tf_render_ok(event.rank) and f_smt_nearby_render_ok(event.pivotBBar) and f_smt_render_time_ok(event.pivotBTime) and not event.bodyBlocked
+
+f_smt_hard_winner(SmtEvent dominant, SmtEvent candidate) =>
+    dominant.rank > candidate.rank or (dominant.rank == candidate.rank and dominant.pairSlot < candidate.pairSlot) or (dominant.rank == candidate.rank and dominant.pairSlot == candidate.pairSlot and dominant.id < candidate.id)
+
+f_smt_hard_loses(int idx) =>
+    bool loses = false
+    SmtEvent candidate = array.get(smt_events, idx)
+    int n = array.size(smt_events)
+    if candidate.projectA and candidate.dir != 0 and not na(candidate.pivotATime) and not na(candidate.pivotBTime) and n > 1
+        for i = 0 to n - 1
+            if i != idx and not loses
+                SmtEvent other = array.get(smt_events, i)
+                bool sameEvent = other.projectA and other.dir == candidate.dir and other.pivotATime == candidate.pivotATime and other.pivotBTime == candidate.pivotBTime
+                loses := sameEvent and f_smt_hard_winner(other, candidate)
+    loses
+
+f_smt_inside_dominates(SmtEvent keeper, SmtEvent candidate) =>
+    int keepLeft = math.min(keeper.pivotABar, keeper.pivotBBar)
+    int keepRight = math.max(keeper.pivotABar, keeper.pivotBBar)
+    int candidateLeft = math.min(candidate.pivotABar, candidate.pivotBBar)
+    int candidateRight = math.max(candidate.pivotABar, candidate.pivotBBar)
+    int keepSpan = keepRight - keepLeft
+    int candidateSpan = candidateRight - candidateLeft
+    bool directionOk = keeper.dir != 0 and keeper.dir == candidate.dir
+    bool structureOk = f_smt_cleanup_struct_ok(candidate.rank, candidate.structType, keeper.structType)
+    bool priorityOk = keeper.rank > candidate.rank or (keeper.rank == candidate.rank and keepSpan > candidateSpan)
+    candidateLeft >= keepLeft + 1 and candidateRight <= keepRight - 1 and keepSpan > candidateSpan and candidateSpan > 0 and keepSpan >= 3 and directionOk and structureOk and priorityOk
+
+f_smt_inside_loses(int idx) =>
+    bool loses = false
+    SmtEvent candidate = array.get(smt_events, idx)
+    int n = array.size(smt_events)
+    if candidate.projectB and n > 1
+        for i = 0 to n - 1
+            if i != idx and not loses
+                SmtEvent keeper = array.get(smt_events, i)
+                loses := keeper.projectB and f_smt_inside_dominates(keeper, candidate)
+    loses
+
+f_smt_pivot_winner(SmtEvent dominant, SmtEvent candidate) =>
+    dominant.rank > candidate.rank or (dominant.rank == candidate.rank and dominant.id < candidate.id)
+
+f_smt_pivot_loses(int idx, bool checkPivotA) =>
+    bool loses = false
+    SmtEvent candidate = array.get(smt_events, idx)
+    int n = array.size(smt_events)
+    if candidate.projectA and candidate.dir != 0 and n > 1
+        for i = 0 to n - 1
+            if i != idx and not loses
+                SmtEvent other = array.get(smt_events, i)
+                bool samePivot = checkPivotA ? other.pivotATime == candidate.pivotATime : other.pivotBTime == candidate.pivotBTime
+                bool directionOk = other.dir == candidate.dir
+                bool structureOk = f_smt_cleanup_struct_ok(candidate.rank, candidate.structType, other.structType)
+                loses := other.projectA and samePivot and directionOk and structureOk and f_smt_pivot_winner(other, candidate)
+    loses
+
+f_smt_prepare_projection() =>
+    int n = array.size(smt_events)
+    if n > 0
+        for i = 0 to n - 1
+            SmtEvent event = array.get(smt_events, i)
+            bool baseEligible = f_smt_event_base_render_ok(event)
+            event.projectA := baseEligible
+            event.projectB := baseEligible
+            event.bypassed := false
+            array.set(smt_events, i, event)
+
+        // Exact A-B arbitration is independent from optional cleanup modes.
+        for i = 0 to n - 1
+            SmtEvent event = array.get(smt_events, i)
+            event.projectB := event.projectA and not f_smt_hard_loses(i)
+            array.set(smt_events, i, event)
+
+        bool insideBypassMode = smt_cleanup_mode == "Bypass Inside Range"
+        bool evaluateInside = smt_cleanup_inside or insideBypassMode
+        for i = 0 to n - 1
+            SmtEvent event = array.get(smt_events, i)
+            bool losesInside = evaluateInside and event.projectB and f_smt_inside_loses(i)
+            event.projectA := event.projectB and not (smt_cleanup_inside and losesInside)
+            event.bypassed := smt_aesthetic_bypass and insideBypassMode and losesInside
+            array.set(smt_events, i, event)
+
+        bool pivotABypassMode = smt_cleanup_mode == "Bypass Pivot A"
+        bool pivotBBypassMode = smt_cleanup_mode == "Bypass Pivot B"
+        bool evaluatePivotA = smt_cleanup_pivot_a or pivotABypassMode
+        bool evaluatePivotB = smt_cleanup_pivot_b or pivotBBypassMode
+        for i = 0 to n - 1
+            SmtEvent event = array.get(smt_events, i)
+            bool losesPivotA = evaluatePivotA and event.projectA and f_smt_pivot_loses(i, true)
+            bool losesPivotB = evaluatePivotB and event.projectA and f_smt_pivot_loses(i, false)
+            bool removed = (smt_cleanup_pivot_a and losesPivotA) or (smt_cleanup_pivot_b and losesPivotB)
+            event.projectB := event.projectA and not removed
+            bool pivotBypassed = (pivotABypassMode and losesPivotA) or (pivotBBypassMode and losesPivotB)
+            event.bypassed := event.bypassed or (smt_aesthetic_bypass and pivotBypassed)
+            array.set(smt_events, i, event)
+    0
+
+f_smt_sync_render_at(int idx, bool shouldRender) =>
+    if idx >= 0 and idx < array.size(smt_events)
+        SmtEvent event = array.get(smt_events, idx)
+        if shouldRender
+            color eventColor = event.bypassed ? color.new(f_smt_rank_color(event.rank), 65) : f_smt_rank_color(event.rank)
+            if na(event.lineId)
+                event.lineId := line.new(x1=event.pivotATime, y1=event.pivotAPrice, x2=event.pivotBTime, y2=event.pivotBPrice, xloc=xloc.bar_time, color=eventColor, width=1, style=smt_line_style)
+            else
+                line.set_xy1(event.lineId, event.pivotATime, event.pivotAPrice)
+                line.set_xy2(event.lineId, event.pivotBTime, event.pivotBPrice)
+                line.set_color(event.lineId, eventColor)
+                line.set_style(event.lineId, smt_line_style)
+            bool labelsOn = f_smt_labels_for_rank(event.rank)
+            if labelsOn
+                int labelTime = f_smt_event_label_time(event.pivotATime, event.pivotBTime, event.pivotABar, event.pivotBBar)
+                string defaultText = f_smt_default_label_text(event.rank, event.pairSlot)
+                string displayText = event.bypassed ? (smt_bypass_labels_show ? f_smt_bypass_label_text(event.rank, event.pairSlot) : "") : defaultText
+                color textColor = event.bypassed ? (smt_bypass_labels_show ? color.new(smt_txt_all, 50) : color.new(smt_txt_all, 100)) : smt_txt_all
+                if na(event.labelId)
+                    event.labelId := label.new(x=labelTime, y=f_smt_event_mid_y(event.pivotAPrice, event.pivotBPrice), text=displayText, xloc=xloc.bar_time, yloc=yloc.price, color=color.new(color.white, 100), style=event.dir == SMT_DIR_BULL ? label.style_label_up : label.style_label_down, textcolor=textColor, size=smt_label_size, tooltip=defaultText)
+                else
+                    label.set_x(event.labelId, labelTime)
+                    label.set_y(event.labelId, f_smt_event_mid_y(event.pivotAPrice, event.pivotBPrice))
+                    label.set_text(event.labelId, displayText)
+                    label.set_textcolor(event.labelId, textColor)
+                    label.set_size(event.labelId, smt_label_size)
+            else if not na(event.labelId)
+                label.delete(event.labelId)
+                event.labelId := na
+        else
+            if not na(event.labelId)
+                label.delete(event.labelId)
+                event.labelId := na
+            if not na(event.lineId)
+                line.delete(event.lineId)
+                event.lineId := na
+        array.set(smt_events, idx, event)
+    0
+
+f_smt_project_events() =>
+    if barstate.islast
+        f_smt_prepare_projection()
+        array<int> bucketCounts = array.new_int(SMT_LIVE_SLOTS, 0)
+        int rendered = 0
+        int n = array.size(smt_events)
+        if n > 0
+            // Global object pressure is resolved by rank first, then recency.
+            for rankCursor = SMT_STATE_CYCLES to 1
+                for i = 0 to n - 1
+                    SmtEvent event = array.get(smt_events, i)
+                    if event.rank == rankCursor
+                        bool shouldRender = event.projectB
+                        if shouldRender and event.state == SMT_EVENT_CONFIRMED
+                            int bucket = f_smt_live_slot(event.rank, event.pairSlot, event.dir)
+                            int bucketCount = array.get(bucketCounts, bucket)
+                            shouldRender := bucketCount < smt_history_limit
+                            if shouldRender
+                                array.set(bucketCounts, bucket, bucketCount + 1)
+                        shouldRender := shouldRender and rendered < SMT_RENDER_EVENT_CAP
+                        if shouldRender
+                            rendered += 1
+                        event.projectA := shouldRender
+                        array.set(smt_events, i, event)
+            for i = 0 to n - 1
+                f_smt_sync_render_at(i, array.get(smt_events, i).projectA)
+    0
+//==============================================================================
+// Family runtime
+//==============================================================================
+f_smt_run_pair(SmtRangeState mainState, SmtRangeState pairState, bool engineEnabled, SmtCorrelationDescriptor pair, int rank, int pairSlot) =>
+    if not na(mainState.cycleKey)
+        int bearSlot = f_smt_live_slot(rank, pairSlot, SMT_DIR_BEAR)
+        int bullSlot = f_smt_live_slot(rank, pairSlot, SMT_DIR_BULL)
+        // Finalization belongs to the main range transition and never to a line.
+        f_smt_finalize_live_slot(bearSlot, mainState.cycleKey)
+        f_smt_finalize_live_slot(bullSlot, mainState.cycleKey)
+        bool cycleAligned = mainState.cycleKey == pairState.cycleKey and not na(mainState.previousCycleKey) and mainState.previousCycleKey == pairState.previousCycleKey
+        bool rangesReady = mainState.hasCurrentRange and mainState.hasPreviousRange and pairState.hasCurrentRange and pairState.hasPreviousRange
+        bool canResolve = engineEnabled and pair.configured and pair.dataReady and cycleAligned and rangesReady
+        if canResolve
+            SmtSweepState mainSweep = f_smt_build_sweeps(mainState, false)
+            SmtSweepState pairSweep = f_smt_build_sweeps(pairState, pair.inverse)
+            [bearValid, bullValid] = f_smt_resolve_pair_state(mainSweep, pairSweep)
+            f_smt_sync_live_candidate(bearValid, mainState.cycleKey, mainState.previousCycleKey, rank, pairSlot, SMT_DIR_BEAR, mainSweep.highPivotA, mainSweep.highPivotB, mainSweep.highTimeA, mainSweep.highTimeB, mainSweep.highBarA, mainSweep.highBarB)
+            f_smt_sync_live_candidate(bullValid, mainState.cycleKey, mainState.previousCycleKey, rank, pairSlot, SMT_DIR_BULL, mainSweep.lowPivotA, mainSweep.lowPivotB, mainSweep.lowTimeA, mainSweep.lowTimeB, mainSweep.lowBarA, mainSweep.lowBarB)
+        else
+            f_smt_sync_live_candidate(false, mainState.cycleKey, mainState.previousCycleKey, rank, pairSlot, SMT_DIR_BEAR, na, na, na, na, na, na)
+            f_smt_sync_live_candidate(false, mainState.cycleKey, mainState.previousCycleKey, rank, pairSlot, SMT_DIR_BULL, na, na, na, na, na, na)
+    0
+
+f_run_smt_cycle(int cycleIdx, bool engineEnabled, int rangeKey, int rank) =>
+    // Calculation gates own engine cost. Show toggles own only final projection.
+    f_smt_update_state(cycleIdx, SMT_SRC_MAIN, engineEnabled, rangeKey, high, low, time)
+    f_smt_update_state(cycleIdx, SMT_SRC_PAIR1, engineEnabled and smt_corr_pair1.configured, rangeKey, smt_corr_pair1.sourceHigh, smt_corr_pair1.sourceLow, smt_corr_pair1.sourceTime)
+    f_smt_update_state(cycleIdx, SMT_SRC_PAIR2, engineEnabled and smt_corr_pair2.configured, rangeKey, smt_corr_pair2.sourceHigh, smt_corr_pair2.sourceLow, smt_corr_pair2.sourceTime)
+    f_smt_update_state(cycleIdx, SMT_SRC_PAIR3, engineEnabled and smt_corr_pair3.configured, rangeKey, smt_corr_pair3.sourceHigh, smt_corr_pair3.sourceLow, smt_corr_pair3.sourceTime)
+    SmtRangeState mainState = f_smt_get_state(cycleIdx, SMT_SRC_MAIN)
+    SmtRangeState pair1State = f_smt_get_state(cycleIdx, SMT_SRC_PAIR1)
+    SmtRangeState pair2State = f_smt_get_state(cycleIdx, SMT_SRC_PAIR2)
+    SmtRangeState pair3State = f_smt_get_state(cycleIdx, SMT_SRC_PAIR3)
+    f_smt_run_pair(mainState, pair1State, engineEnabled, smt_corr_pair1, rank, 1)
+    f_smt_run_pair(mainState, pair2State, engineEnabled, smt_corr_pair2, rank, 2)
+    f_smt_run_pair(mainState, pair3State, engineEnabled, smt_corr_pair3, rank, 3)
+    0
+
+//==============================================================================
+// GXV SMT execution
+//==============================================================================
+f_smt_seed_engine()
+f_run_smt_cycle(12, tf_ok_12m, val_sesY, 13)
+f_run_smt_cycle(11, tf_ok_3m, val_sesQ, 12)
+f_run_smt_cycle(10, tf_ok_1m, val_sesMT, 11)
+f_run_smt_cycle(9, tf_ok_1w, val_sesM, 10)
+f_run_smt_cycle(8, tf_ok_1d, val_sesW, 9)
+f_run_smt_cycle(7, tf_ok_12h, val_ses720, 8)
+f_run_smt_cycle(6, tf_ok_7h, val_ses420, 7)
+f_run_smt_cycle(5, tf_ok_6h, val_sesD, 6)
+f_run_smt_cycle(4, tf_ok_4h, val_ses240, 5)
+f_run_smt_cycle(3, tf_ok_90m, val_ses90, 4)
+f_run_smt_cycle(2, tf_ok_1h, val_ses60, 3)
+f_run_smt_cycle(1, tf_ok_30m, val_ses30, 2)
+f_run_smt_cycle(0, tf_ok_15m, val_ses15, 1)
+
+// Check newly confirmed events on the rollover bar itself.
+f_smt_mark_historical_invalidations()
+f_smt_gc_events()
+f_smt_project_events()
